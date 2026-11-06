@@ -194,10 +194,119 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (method === "POST" && publishMatch) {
     const [, orgId, courseId] = publishMatch;
     if (!await requireMember(env, actor, orgId, ["owner","administrator","publisher"])) return fail(403, "PUBLISH_PERMISSION_REQUIRED", "Only an authorized publisher in a verified organization can publish courses.");
-    const result = await env.DB.prepare("UPDATE courses SET status='published',published_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organization_id=? AND owner_type='organization' AND status IN ('draft','review')").bind(courseId, orgId).run();
+    const result = await env.DB.prepare("UPDATE courses SET status='published',published_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organization_id=? AND owner_type='organization' AND status IN ('draft','review') AND EXISTS (SELECT 1 FROM course_modules m JOIN course_lessons l ON l.module_id=m.id WHERE m.course_id=courses.id)").bind(courseId, orgId).run();
     if (!result.meta.changes) return fail(404, "COURSE_NOT_FOUND", "The draft course was not found in this organization.");
     await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id) VALUES(?,?,?,?,?,?)").bind(id(), actor.id, orgId, "course.published", "course", courseId).run();
     return json({ ok: true, courseId, status: "published" });
+  }
+
+  const curriculumMatch = path.match(/^\/api\/courses\/([A-Za-z0-9-]+)\/curriculum$/);
+  if (method === "GET" && curriculumMatch) {
+    const courseId = curriculumMatch[1];
+    const enrollment = await env.DB.prepare("SELECT id FROM enrollments WHERE course_id=? AND learner_id=? AND status IN ('active','completed')").bind(courseId, actor.id).first();
+    const rows = await env.DB.prepare("SELECT m.id AS module_id,m.title AS module_title,m.position AS module_position,l.id AS lesson_id,l.title AS lesson_title,l.lesson_type,l.content_json,l.position AS lesson_position,l.is_preview FROM course_modules m JOIN course_lessons l ON l.module_id=m.id JOIN courses c ON c.id=m.course_id WHERE c.id=? AND c.status='published' AND (?=1 OR l.is_preview=1) ORDER BY m.position,l.position")
+      .bind(courseId, enrollment ? 1 : 0).all();
+    return json({ ok: true, enrolled: Boolean(enrollment), curriculum: rows.results || [] });
+  }
+
+  const assignmentCreate = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses\/([A-Za-z0-9-]+)\/assignments$/);
+  if (method === "POST" && assignmentCreate) {
+    const [, orgId, courseId] = assignmentCreate;
+    if (!await requireMember(env, actor, orgId, ["owner","administrator","publisher","instructor"])) return fail(403, "COURSE_EDIT_PERMISSION_REQUIRED", "You do not have permission to add assignments.");
+    const course = await env.DB.prepare("SELECT id FROM courses WHERE id=? AND organization_id=? AND owner_type='organization' AND status='draft'").bind(courseId, orgId).first();
+    if (!course) return fail(404, "DRAFT_COURSE_NOT_FOUND", "Assignments can only be added to a draft course in this organization.");
+    let body: any;
+    try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check the assignment details."); }
+    const title = String(body.title || "").trim().slice(0, 180);
+    if (!title) return fail(422, "ASSIGNMENT_TITLE_REQUIRED", "An assignment title is required.");
+    const dueAt = body.dueAt ? new Date(String(body.dueAt)) : null;
+    if (dueAt && Number.isNaN(dueAt.getTime())) return fail(422, "INVALID_DUE_DATE", "Enter a valid assignment deadline.");
+    const assignmentId = id();
+    await env.DB.prepare("INSERT INTO assignments(id,course_id,title,instructions,due_at,max_score) VALUES(?,?,?,?,?,?)")
+      .bind(assignmentId, courseId, title, String(body.instructions || "").slice(0, 5000), dueAt ? dueAt.toISOString() : null, body.maxScore == null ? null : Math.max(0, Number(body.maxScore))).run();
+    await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id) VALUES(?,?,?,?,?,?)").bind(id(), actor.id, orgId, "course.assignment.created", "assignment", assignmentId).run();
+    return json({ ok: true, assignmentId }, 201);
+  }
+
+  const moduleMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses\/([A-Za-z0-9-]+)\/modules$/);
+  if (method === "POST" && moduleMatch) {
+    const [, orgId, courseId] = moduleMatch;
+    if (!await requireMember(env, actor, orgId, ["owner","administrator","publisher","instructor"])) return fail(403, "COURSE_EDIT_PERMISSION_REQUIRED", "You do not have permission to edit this course.");
+    const course = await env.DB.prepare("SELECT id FROM courses WHERE id=? AND organization_id=? AND owner_type='organization' AND status='draft'").bind(courseId, orgId).first();
+    if (!course) return fail(404, "DRAFT_COURSE_NOT_FOUND", "Only a draft course in this organization can be edited.");
+    let body: any;
+    try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check the module details."); }
+    const title = String(body.title || "").trim().slice(0, 180);
+    if (!title) return fail(422, "MODULE_TITLE_REQUIRED", "A module title is required.");
+    const moduleId = id();
+    await env.DB.prepare("INSERT INTO course_modules(id,course_id,title,position) VALUES(?,?,?,?)").bind(moduleId, courseId, title, Math.max(0, Math.floor(Number(body.position || 0)))).run();
+    await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id) VALUES(?,?,?,?,?,?)").bind(id(), actor.id, orgId, "course.module.created", "course_module", moduleId).run();
+    return json({ ok: true, moduleId }, 201);
+  }
+
+  const lessonMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/modules\/([A-Za-z0-9-]+)\/lessons$/);
+  if (method === "POST" && lessonMatch) {
+    const [, orgId, moduleId] = lessonMatch;
+    if (!await requireMember(env, actor, orgId, ["owner","administrator","publisher","instructor"])) return fail(403, "COURSE_EDIT_PERMISSION_REQUIRED", "You do not have permission to edit this course.");
+    const module = await env.DB.prepare("SELECT m.id FROM course_modules m JOIN courses c ON c.id=m.course_id WHERE m.id=? AND c.organization_id=? AND c.status='draft' AND c.owner_type='organization'").bind(moduleId, orgId).first();
+    if (!module) return fail(404, "DRAFT_MODULE_NOT_FOUND", "This module is not part of an editable draft course.");
+    let body: any;
+    try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check the lesson details."); }
+    const title = String(body.title || "").trim().slice(0, 180);
+    const lessonType = String(body.lessonType || "text");
+    const allowedTypes = ["video","text","document","link","presentation","quiz","assignment"];
+    if (!title || !allowedTypes.includes(lessonType)) return fail(422, "LESSON_DETAILS_REQUIRED", "Enter a lesson title and choose a supported lesson type.");
+    const contentJson = JSON.stringify(body.content || {});
+    if (contentJson.length > 20_000) return fail(413, "LESSON_CONTENT_TOO_LARGE", "Keep lesson details under 20 KB. Store large files in private course storage.");
+    const lessonId = id();
+    await env.DB.prepare("INSERT INTO course_lessons(id,module_id,title,lesson_type,content_json,position,is_preview) VALUES(?,?,?,?,?,?,?)")
+      .bind(lessonId, moduleId, title, lessonType, contentJson, Math.max(0, Math.floor(Number(body.position || 0))), body.isPreview ? 1 : 0).run();
+    await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id) VALUES(?,?,?,?,?,?)").bind(id(), actor.id, orgId, "course.lesson.created", "course_lesson", lessonId).run();
+    return json({ ok: true, lessonId }, 201);
+  }
+
+  const enrollMatch = path.match(/^\/api\/courses\/([A-Za-z0-9-]+)\/enroll$/);
+  if (method === "POST" && enrollMatch) {
+    const course = await env.DB.prepare("SELECT id,organization_id,price_minor,status FROM courses WHERE id=? AND status='published'").bind(enrollMatch[1]).first<{id:string;organization_id:string|null;price_minor:number;status:string}>();
+    if (!course) return fail(404, "COURSE_NOT_AVAILABLE", "This course is not available for enrollment.");
+    if (course.price_minor > 0) return fail(402, "CHECKOUT_REQUIRED", "This course requires checkout. Paid enrollment will be enabled when the payment provider is connected.");
+    const enrollmentId = id();
+    await env.DB.prepare("INSERT OR IGNORE INTO enrollments(id,course_id,learner_id,organization_id,source,status) VALUES(?,?,?,?, 'marketplace','active')").bind(enrollmentId, course.id, actor.id, course.organization_id).run();
+    const enrollment = await env.DB.prepare("SELECT id,status,enrolled_at FROM enrollments WHERE course_id=? AND learner_id=?").bind(course.id, actor.id).first();
+    return json({ ok: true, enrollment }, 201);
+  }
+
+  const progressMatch = path.match(/^\/api\/enrollments\/([A-Za-z0-9-]+)\/progress$/);
+  if (method === "POST" && progressMatch) {
+    let body: any;
+    try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check the progress update."); }
+    const lessonId = String(body.lessonId || "");
+    const enrollment = await env.DB.prepare("SELECT e.id,e.course_id FROM enrollments e WHERE e.id=? AND e.learner_id=? AND e.status='active'").bind(progressMatch[1], actor.id).first<{id:string;course_id:string}>();
+    if (!enrollment) return fail(404, "ENROLLMENT_NOT_FOUND", "This active enrollment was not found for your account.");
+    const lesson = await env.DB.prepare("SELECT l.id FROM course_lessons l JOIN course_modules m ON m.id=l.module_id WHERE l.id=? AND m.course_id=?").bind(lessonId, enrollment.course_id).first();
+    if (!lesson) return fail(404, "LESSON_NOT_IN_COURSE", "This lesson is not part of the enrolled course.");
+    const status = body.status === "completed" ? "completed" : "in_progress";
+    const seconds = Math.max(0, Math.min(86_400, Math.floor(Number(body.lastPositionSeconds || 0))));
+    await env.DB.prepare("INSERT INTO lesson_progress(enrollment_id,lesson_id,status,last_position_seconds,completed_at,updated_at) VALUES(?,?,?,?,CASE WHEN ?='completed' THEN CURRENT_TIMESTAMP ELSE NULL END,CURRENT_TIMESTAMP) ON CONFLICT(enrollment_id,lesson_id) DO UPDATE SET status=excluded.status,last_position_seconds=excluded.last_position_seconds,completed_at=CASE WHEN excluded.status='completed' THEN CURRENT_TIMESTAMP ELSE lesson_progress.completed_at END,updated_at=CURRENT_TIMESTAMP")
+      .bind(enrollment.id, lessonId, status, seconds, status).run();
+    return json({ ok: true, lessonId, status, lastPositionSeconds: seconds });
+  }
+
+  const submissionMatch = path.match(/^\/api\/assignments\/([A-Za-z0-9-]+)\/submissions$/);
+  if (method === "POST" && submissionMatch) {
+    let body: any;
+    try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check your assignment response."); }
+    const assignment = await env.DB.prepare("SELECT a.id,a.course_id,a.due_at FROM assignments a WHERE a.id=?").bind(submissionMatch[1]).first<{id:string;course_id:string;due_at:string|null}>();
+    if (!assignment) return fail(404, "ASSIGNMENT_NOT_FOUND", "This assignment is not available.");
+    const enrollment = await env.DB.prepare("SELECT id FROM enrollments WHERE course_id=? AND learner_id=? AND status IN ('active','completed')").bind(assignment.course_id, actor.id).first();
+    if (!enrollment) return fail(403, "ENROLLMENT_REQUIRED", "Enroll in this course before submitting the assignment.");
+    if (assignment.due_at && new Date(assignment.due_at).getTime() < Date.now()) return fail(409, "ASSIGNMENT_CLOSED", "The submission deadline has passed.");
+    const responseJson = JSON.stringify(body.response ?? {});
+    if (responseJson.length > 20_000) return fail(413, "SUBMISSION_TOO_LARGE", "Keep your response under 20 KB or use an approved course file upload.");
+    const submissionId = id();
+    await env.DB.prepare("INSERT INTO assignment_submissions(id,assignment_id,learner_id,response_json,status) VALUES(?,?,?,?,'submitted') ON CONFLICT(assignment_id,learner_id) DO UPDATE SET response_json=excluded.response_json,status='submitted',submitted_at=CURRENT_TIMESTAMP,score=NULL,feedback=NULL,reviewed_by=NULL,reviewed_at=NULL")
+      .bind(submissionId, assignment.id, actor.id, responseJson).run();
+    return json({ ok: true, assignmentId: assignment.id, status: "submitted" }, 201);
   }
 
   return fail(404, "NOT_FOUND", "This Proctify service route does not exist.");
