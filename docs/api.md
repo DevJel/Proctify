@@ -18,7 +18,14 @@ Base path: `/api`. All API responses are JSON. The Worker is a separate deployme
 |---|---|---|
 | `POST /organizations/{id}/claim` | Claim verified organization using matching verified email | Applicant matching organization owner email |
 | `POST /organizations/{id}/courses` | Create an organization-owned draft course | Owner, administrator or publisher |
-| `POST /organizations/{id}/courses/{courseId}/publish` | Publish an organization course | Owner, administrator or publisher |
+| `POST /organizations/{id}/courses/{courseId}/publish` | Publish a course after it has at least one module and lesson | Owner, administrator or publisher |
+| `POST /organizations/{id}/courses/{courseId}/modules` | Add a curriculum module to a draft course | Owner, administrator, publisher or instructor |
+| `POST /organizations/{id}/modules/{moduleId}/lessons` | Add a lesson to a draft module | Owner, administrator, publisher or instructor |
+| `POST /organizations/{id}/courses/{courseId}/assignments` | Add an assignment to a draft course | Owner, administrator, publisher or instructor |
+| `GET /courses/{courseId}/curriculum` | Read published curriculum; non-enrolled learners see preview lessons only | Signed-in learner |
+| `POST /courses/{courseId}/enroll` | Enroll in a free published course | Signed-in learner |
+| `POST /enrollments/{id}/progress` | Save lesson progress for the signed-in learner | Enrollment owner |
+| `POST /assignments/{id}/submissions` | Submit or resubmit an assignment | Enrolled learner |
 
 ## Super Admin endpoints
 
@@ -47,4 +54,4 @@ The token issuer must verify the user's email before issuing a token. The Worker
 
 ## Current implementation limits
 
-This is an API foundation, not a complete LMS service. Course module editing, lesson player progress APIs, assignment grading, assessment-session integration, email OTP delivery, SES notifications, payment checkout/webhooks, payout execution, custom-domain routing, file upload/download signing, and the final three login screens still require implementation and provider configuration. Payment status must never be accepted from a browser request.
+This is an API foundation, not a complete LMS service. Course module/lesson/assignment editing, free enrollment, preview-aware curriculum access, lesson progress and assignment submission are included. Assignment grading, assessment-session integration, email OTP delivery, SES notifications, payment checkout/webhooks, payout execution, custom-domain routing, file upload/download signing, and the final three login screens still require implementation and provider configuration. Paid course enrollment returns a clear checkout-required response until a payment provider is connected. Payment status must never be accepted from a browser request.
