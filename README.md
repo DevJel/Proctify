@@ -35,6 +35,8 @@ See:
 
 The LMS API foundation is separate from the GitHub Pages deployment. Provision D1, R2, identity verification, Turnstile, SES and a payment provider before enabling the related production features. Do not place secrets in this repository or browser code. Use staging and test role isolation before routing real learners.
 
+The LMS validation workflow checks Worker TypeScript installation/type checking, applies the database migration to a clean SQLite database, confirms all twelve first-party assessment records exist, and confirms those records cannot be updated or deleted.
+
 ## Integration boundary
 
 External services and connectors must remain behind clearly defined service boundaries. Keep connector credentials in protected secret storage, never in frontend code or committed configuration. Connector-specific setup and any integration mixing or exceptions must be documented here in the README footer, not embedded as unrelated logic in application files.
