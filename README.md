@@ -8,7 +8,12 @@ By Operava Global Solutions.
 
 ## Live site
 
-This repository contains the static frontend. Open `index.html` or host the files on any static hosting provider (GitHub Pages, Cloudflare Pages, Netlify, etc.).
+**https://devjel.github.io/Proctify/**
+
+> Note: GitHub Pages must be enabled in the repository settings:
+> **Settings → Pages → Build and deployment → Source: GitHub Actions**
+
+A workflow (`.github/workflows/deploy-pages.yml`) is already set up to deploy the static site on every push to `main`.
 
 ## Assets
 
