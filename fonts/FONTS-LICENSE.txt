@@ -1,0 +1,2 @@
+Lora (Cyreal) and Inter (Rasmus Andersson) are licensed under the SIL Open Font License 1.1.
+https://openfontlicense.org — the files here are Latin subsets converted to WOFF.
