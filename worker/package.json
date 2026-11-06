@@ -1,0 +1,18 @@
+{
+  "name": "proctify-lms-api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 migrations apply proctify-db --local",
+    "db:remote": "wrangler d1 migrations apply proctify-db --remote",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261106.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.45.0"
+  }
+}

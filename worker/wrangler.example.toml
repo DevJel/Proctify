@@ -1,0 +1,24 @@
+name = "proctify-lms-api"
+main = "src/index.ts"
+compatibility_date = "2026-11-07"
+
+[vars]
+APP_ORIGIN = "https://devjel.github.io"
+AUTH_ISSUER = "replace-with-approved-identity-issuer"
+AUTH_AUDIENCE = "proctify"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "proctify-db"
+database_id = "REPLACE_WITH_CREATED_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "ASSETS"
+bucket_name = "proctify-course-assets"
+
+# Add secrets through the Cloudflare dashboard or Wrangler secret command.
+# Never commit actual values:
+# AUTH_JWT_SECRET
+# TURNSTILE_SECRET
+# PAYMENT_WEBHOOK_SECRET

@@ -1,0 +1,49 @@
+name: Validate Proctify LMS foundation
+
+on:
+  push:
+    branches: ["main", "feature/**"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  worker-typecheck:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Worker development tools
+        run: npm install --no-package-lock
+      - name: Check Worker types
+        run: npm run typecheck
+
+  database-migration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SQLite
+        run: sudo apt-get update && sudo apt-get install -y sqlite3
+      - name: Apply migration to a clean SQLite database
+        run: sqlite3 /tmp/proctify-test.db < worker/migrations/0001_lms_foundation.sql
+      - name: Confirm all twelve Proctify-owned assessments are present
+        run: test "$(sqlite3 /tmp/proctify-test.db "SELECT COUNT(*) FROM proctify_assessments;")" = "12"
+      - name: Confirm first-party assessment records cannot be edited
+        run: |
+          if sqlite3 /tmp/proctify-test.db "UPDATE proctify_assessments SET active=0 WHERE assessment_id='bigfive';"; then
+            echo "Assessment protection trigger did not block an update"
+            exit 1
+          fi
+      - name: Confirm first-party assessment records cannot be deleted
+        run: |
+          if sqlite3 /tmp/proctify-test.db "DELETE FROM proctify_assessments WHERE assessment_id='bigfive';"; then
+            echo "Assessment protection trigger did not block a deletion"
+            exit 1
+          fi

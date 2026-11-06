@@ -1,21 +1,42 @@
 # Proctify
 
-**Proctored, Verified Assessments**
+**Proctored, Verified Assessments and Learning Management**
 
-Twelve assessments — behavioral style, Big Five, culture fit, cultural and emotional intelligence, conflict, work values, workplace judgment, cognitive aptitude, and proctored English, call center and IT tests — with digitally signed results.
+Proctify brings together twelve first-party assessments, proctored skills testing, verified results and a multi-organization learning marketplace. Schools, companies and independent publishers can manage their own courses after verification, while Proctify retains ownership and control of its assessment and certification catalog.
 
 By Operava Global Solutions.
 
-## Live site
+## Current application
+
+The existing assessment experience and its visual assets are preserved as the baseline. The current static preview is available at:
 
 **https://devjel.github.io/Proctify/**
 
-> Note: GitHub Pages must be enabled in the repository settings:
-> **Settings → Pages → Build and deployment → Source: GitHub Actions**
+GitHub Pages publishes the static frontend from the repository root. It does not host the API, database, authentication, email delivery or payment processing.
 
-A workflow (`.github/workflows/deploy-pages.yml`) is already set up to deploy the static site on every push to `main`.
+## LMS architecture
 
-## Assets
+See:
+- [LMS architecture](docs/lms-architecture.md)
+- [Implementation status](docs/implementation-status.md)
+- [Deployment and operations](docs/deployment.md)
+- [API foundation](docs/api.md)
+- [Security and privacy rules](docs/security.md)
 
-- `assets/img/` — brand marks, cover images, hero, seals
-- `fonts/` — Inter and Lora (see `FONTS-LICENSE.txt`)
+## Repository layout
+
+- `index.html` — existing Proctify assessment application
+- `assets/img/` — existing brand marks, assessment covers, hero art and seals
+- `fonts/` — Inter and Lora fonts (see `FONTS-LICENSE.txt`)
+- `worker/` — Cloudflare Worker API foundation and D1 migration
+- `docs/` — architecture, implementation status and deployment guidance
+
+## Important production notes
+
+The LMS API foundation is separate from the GitHub Pages deployment. Provision D1, R2, identity verification, Turnstile, SES and a payment provider before enabling the related production features. Do not place secrets in this repository or browser code. Use staging and test role isolation before routing real learners.
+
+The LMS validation workflow checks Worker TypeScript installation/type checking, applies the database migration to a clean SQLite database, confirms all twelve first-party assessment records exist, and confirms those records cannot be updated or deleted.
+
+## Integration boundary
+
+External services and connectors must remain behind clearly defined service boundaries. Keep connector credentials in protected secret storage, never in frontend code or committed configuration. Connector-specific setup and any integration mixing or exceptions must be documented here in the README footer, not embedded as unrelated logic in application files.
