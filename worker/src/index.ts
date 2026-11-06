@@ -76,6 +76,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const method = request.method.toUpperCase();
 
   if (method === "GET" && path === "/api/health") {
+    await env.DB.prepare("SELECT 1 AS ready").first();
     return json({ ok: true, service: "proctify-lms-api", mode: "connected", capabilities: { database: true, identity: Boolean(env.AUTH_JWT_SECRET), registration: Boolean(env.TURNSTILE_SECRET), payments: false, email: false } });
   }
 
@@ -106,6 +107,14 @@ async function route(request: Request, env: Env): Promise<Response> {
     const result = await env.DB.prepare("SELECT c.id,c.slug,c.title,c.short_description,c.category,c.level,c.price_minor,c.currency,c.certificate_enabled,o.name AS publisher_name,o.slug AS publisher_slug FROM courses c LEFT JOIN organizations o ON o.id=c.organization_id WHERE c.status='published' AND (c.owner_type='proctify' OR o.status='verified') AND (?='%%' OR c.title LIKE ? OR c.short_description LIKE ? OR c.category LIKE ?) ORDER BY c.published_at DESC LIMIT ?")
       .bind(query, query, query, query, limit).all();
     return json({ ok: true, courses: result.results || [] });
+  }
+
+  const courseMatch = path.match(/^\/api\/marketplace\/courses\/([a-z0-9-]{1,80})$/);
+  if (method === "GET" && courseMatch) {
+    const course = await env.DB.prepare("SELECT c.id,c.slug,c.title,c.short_description,c.description,c.category,c.language_code,c.level,c.price_minor,c.currency,c.certificate_enabled,c.published_at,o.name AS publisher_name,o.slug AS publisher_slug FROM courses c LEFT JOIN organizations o ON o.id=c.organization_id WHERE c.slug=? AND c.status='published' AND (c.owner_type='proctify' OR o.status='verified') LIMIT 1")
+      .bind(courseMatch[1]).first();
+    if (!course) return fail(404, "COURSE_NOT_FOUND", "This course is not available.");
+    return json({ ok: true, course });
   }
 
   const certificateMatch = path.match(/^\/api\/certificates\/([A-Za-z0-9-]{6,100})$/);

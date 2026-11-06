@@ -6,6 +6,7 @@
 - GitHub Actions is configured to publish the repository root to GitHub Pages after pushes to `main`.
 - The current frontend checks `GET api/health` and falls back to a browser-only preview mode when the API is unavailable.
 - The existing admin preview uses a browser-entered admin token and explicitly notes that production needs a protected API and Cloudflare Access.
+- The existing frontend probes a relative `api/health` path. On the GitHub Pages project URL, this resolves under the `/Proctify/` path; a same-origin Worker route or an explicit API base URL is required before the frontend can use the new Worker.
 
 ## Not verified as production services
 - No Worker source, D1 migration, R2 binding, identity provider configuration, SES integration, or payment webhook was present on the inspected `main` branch.
@@ -26,4 +27,6 @@
 5. Configure SES delivery for verification and account notices.
 6. Select and configure a payment provider, signed webhooks, refunds and payouts.
 7. Connect the existing frontend to the Worker and implement the three role-specific login experiences.
-8. Run migrations, type checks, API tests, access-control tests, browser checks and restore testing before enabling production traffic.
+8. Configure a same-origin Worker route or explicit frontend API base URL; the current relative health check is not yet connected to this Worker.
+9. Implement and test the three role-specific login screens and complete learning/payment endpoints.
+10. Run migrations, type checks, API tests, access-control tests, browser checks and restore testing before enabling production traffic.

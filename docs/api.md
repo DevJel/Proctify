@@ -9,6 +9,7 @@ Base path: `/api`. All API responses are JSON. The Worker is a separate deployme
 | `GET /health` | Service and configuration status | Public; reveals no secrets |
 | `POST /organization-applications` | Submit a school, company or publisher application | Turnstile required |
 | `GET /marketplace/courses` | List published courses | Public; only eligible courses returned |
+| `GET /marketplace/courses/{slug}` | Read a published course detail page | Public; only eligible courses returned |
 | `GET /certificates/{verificationCode}` | Verify certificate status | Public; returns limited verification details |
 
 ## Signed-in endpoints
