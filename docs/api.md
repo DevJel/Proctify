@@ -58,6 +58,9 @@ Base path: `/api`. All API responses are JSON. The Worker is a separate deployme
 | `POST /organizations/{id}/groups/{groupId}/messages` | Message one learner in the group | Group educator or organization administrator |
 | `POST /organizations/{id}/learners/{learnerId}/messages` | Message an active learner in the same organization | Owner, administrator or instructor |
 | `GET /learners/me/messages` | Read messages addressed to the signed-in learner | Signed-in learner |
+| `GET /learners/me/groups` | List the learner's active groups and sections | Signed-in learner |
+| `GET /learners/me/groups/{groupId}/announcements` | Read announcements for one of the learner's groups | Group learner |
+| `POST /learners/me/groups/{groupId}/messages` | Send a private reply to an educator assigned to the group | Group learner |
 
 Group course assignment only accepts published Proctify courses or published courses owned by the same organization. Paid courses cannot be assigned without a completed platform checkout. Learners must already be active members of the organization. Educators can only access groups explicitly assigned to them; organization administrators can manage all groups in their organization.
 
