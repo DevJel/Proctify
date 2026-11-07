@@ -46,3 +46,20 @@
 - Log security events without storing passwords, OTPs, bearer tokens or full identity documents.
 - Back up D1 and periodically test restoration.
 - Monitor unusual login attempts, cross-organization access denials and payout changes.
+
+## Passwordless email OTP and sessions
+
+- Use separate cryptographically random `AUTH_OTP_SECRET` and `AUTH_JWT_SECRET` values (minimum 32 characters each).
+- Store only a keyed HMAC of the OTP, challenge ID and keyed email hash. Never store or log the code.
+- Six-digit OTP expires after ten minutes, is single-use and allows at most five attempts.
+- Enforce a 60-second resend delay, maximum five requests per email and twenty per IP per 15 minutes. Add Cloudflare edge rate limiting and bot protection before public launch.
+- Challenge responses must not reveal whether an email has a role or account.
+- Send through SES v2 with a dedicated least-privilege sender identity and AWS credentials held only as Worker secrets.
+- Learner and organization sessions expire after 12 hours; Super Admin after 4 hours.
+- Check the matching D1 session on every request and revoke it on logout.
+- Keep bearer tokens in session-scoped browser storage. Never place them in URLs, logs or analytics.
+- Reject suspended accounts, non-members, unverified organizations, inactive platform admins, expired codes, reused codes, revoked sessions and mismatched session audiences.
+- Bootstrap Super Admin privately; no public endpoint may grant the role.
+- Super Admin currently has an allow-list and shorter session but no independent second factor. Add WebAuthn/TOTP or an approved access gateway before enabling high-impact platform controls.
+
+See [Authentication architecture](authentication-architecture.md) and [Agent handoff](agent-handoff.md).
