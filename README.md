@@ -10,7 +10,7 @@ By Operava Global Solutions.
 
 The existing assessment experience and its visual assets are preserved as the baseline. The current static preview is available at:
 
-**https://devjel.github.io/PROCTORAVA/**
+**https://devjel.github.io/Proctify/**
 
 The latest GitHub Pages deployment workflow for the merged `main` commit reported failure. Verify the deployment in GitHub Actions before assuming the live site reflects the latest repository changes.
 
