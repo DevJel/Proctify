@@ -203,6 +203,36 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, organizationId: org.id, role: "owner" });
   }
 
+  const membersMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/members$/);
+  if (method === "GET" && membersMatch) {
+    const orgId = membersMatch[1];
+    if (!await requireMember(env, actor, orgId, ["owner","administrator"])) return fail(403, "MEMBER_ADMIN_REQUIRED", "Only organization owners and administrators can view the member directory.");
+    const members = await env.DB.prepare("SELECT u.id,u.email,u.display_name,m.role,m.status,m.created_at FROM organization_members m JOIN users u ON u.id=m.user_id WHERE m.organization_id=? ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'administrator' THEN 1 WHEN 'publisher' THEN 2 WHEN 'instructor' THEN 3 WHEN 'reviewer' THEN 4 ELSE 5 END,u.display_name LIMIT 250")
+      .bind(orgId).all();
+    return json({ ok: true, members: members.results || [] });
+  }
+
+  if (method === "POST" && membersMatch) {
+    const orgId = membersMatch[1];
+    const owner = await requireMember(env, actor, orgId, ["owner"]);
+    const admin = owner || await requireMember(env, actor, orgId, ["administrator"]);
+    if (!admin) return fail(403, "MEMBER_ADMIN_REQUIRED", "Only organization owners and administrators can add members.");
+    let body: any;
+    try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check the member details."); }
+    const email = String(body.email || "").trim().toLowerCase();
+    const role = String(body.role || "");
+    const allowed = owner ? ["administrator","publisher","instructor","reviewer","learner"] : ["publisher","instructor","reviewer","learner"];
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !allowed.includes(role)) return fail(422, "INVALID_MEMBER", "Enter a verified account email and a role you are allowed to assign.");
+    const user = await env.DB.prepare("SELECT id FROM users WHERE email=? COLLATE NOCASE AND status='active'").bind(email).first<{id:string}>();
+    if (!user) return fail(404, "ACCOUNT_NOT_FOUND", "The person must first create and verify a Proctify learner account.");
+    const result = await env.DB.prepare("INSERT INTO organization_members(organization_id,user_id,role,status) VALUES(?,?,?,'active') ON CONFLICT(organization_id,user_id) DO UPDATE SET role=excluded.role,status='active' WHERE organization_members.role!='owner'")
+      .bind(orgId, user.id, role).run();
+    if (!result.meta.changes) return fail(409, "OWNER_PROTECTED", "The organization owner role cannot be changed from the member directory.");
+    await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id,detail_json) VALUES(?,?,?,?,?,?,?)")
+      .bind(id(), actor.id, orgId, "organization.member.added_or_updated", "organization_member", user.id, JSON.stringify({email,role})).run();
+    return json({ ok: true, userId: user.id, email, role }, 201);
+  }
+
   const createCourse = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses$/);
   if (method === "POST" && createCourse) {
     const orgId = createCourse[1];
