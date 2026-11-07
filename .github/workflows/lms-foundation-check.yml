@@ -40,7 +40,8 @@ jobs:
       - name: Apply authentication sessions migration
         run: sqlite3 /tmp/proctify-test.db < worker/migrations/0004_auth_sessions.sql
       - name: Confirm authentication tables exist
-        run: test "$(sqlite3 /tmp/proctify-test.db \"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('auth_challenges','auth_sessions');\")" = "2"
+        run: |
+          test "$(sqlite3 /tmp/proctify-test.db "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('auth_challenges','auth_sessions');")" = "2"
       - name: Confirm educator group tables and organization boundaries exist
         run: test "$(sqlite3 /tmp/proctify-test.db "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('learning_groups','learning_group_educators','learning_group_learners','learning_group_courses','learning_group_activities','learning_group_announcements','learner_messages');")" = "7"
       - name: Confirm authentication constraints reject invalid roles and attempts
