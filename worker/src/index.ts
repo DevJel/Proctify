@@ -52,7 +52,7 @@ async function authenticate(request: Request, env: Env): Promise<Actor | null> {
     const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
     if (!audiences.includes(env.AUTH_AUDIENCE)) return null;
     const email = claims.email.trim().toLowerCase();
-    if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return null;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
     const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.AUTH_JWT_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
     const signed = new TextEncoder().encode(parts[0] + "." + parts[1]);
     const signature = Uint8Array.from(atob(parts[2].replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - parts[2].length % 4) % 4)), c => c.charCodeAt(0));
@@ -346,12 +346,22 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, courses: rows.results || [] });
   }
 
+  const archiveMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses\/([A-Za-z0-9-]+)\/archive$/);
+  if (method === "POST" && archiveMatch) {
+    const [, orgId, courseId] = archiveMatch;
+    if (!await requireMember(env, actor, orgId, ["owner","administrator","publisher"])) return fail(403, "COURSE_ARCHIVE_PERMISSION_REQUIRED", "Only an authorized organization publisher can archive a course.");
+    const result = await env.DB.prepare("UPDATE courses SET status='archived',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organization_id=? AND owner_type='organization' AND status='published'").bind(courseId, orgId).run();
+    if (!result.meta.changes) return fail(404, "PUBLISHED_COURSE_NOT_FOUND", "Only a published course in this organization can be archived.");
+    await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id) VALUES(?,?,?,?,?,?)").bind(id(), actor.id, orgId, "course.archived", "course", courseId).run();
+    return json({ ok: true, courseId, status: "archived", existingEnrollmentsPreserved: true });
+  }
+
   const curriculumMatch = path.match(/^\/api\/courses\/([A-Za-z0-9-]+)\/curriculum$/);
   if (method === "GET" && curriculumMatch) {
     const courseId = curriculumMatch[1];
-    const enrollment = await env.DB.prepare("SELECT e.id FROM enrollments e JOIN courses c ON c.id=e.course_id LEFT JOIN organizations o ON o.id=c.organization_id WHERE e.course_id=? AND e.learner_id=? AND e.status IN ('active','completed') AND c.status='published' AND (c.owner_type='proctify' OR o.status='verified')").bind(courseId, actor.id).first();
-    const rows = await env.DB.prepare("SELECT m.id AS module_id,m.title AS module_title,m.position AS module_position,l.id AS lesson_id,l.title AS lesson_title,l.lesson_type,l.content_json,l.position AS lesson_position,l.is_preview FROM course_modules m JOIN course_lessons l ON l.module_id=m.id JOIN courses c ON c.id=m.course_id WHERE c.id=? AND c.status='published' AND (?=1 OR l.is_preview=1) ORDER BY m.position,l.position")
-      .bind(courseId, enrollment ? 1 : 0).all();
+    const enrollment = await env.DB.prepare("SELECT e.id FROM enrollments e JOIN courses c ON c.id=e.course_id LEFT JOIN organizations o ON o.id=c.organization_id WHERE e.course_id=? AND e.learner_id=? AND e.status IN ('active','completed') AND c.status IN ('published','archived') AND (c.owner_type='proctify' OR o.status='verified')").bind(courseId, actor.id).first();
+    const rows = await env.DB.prepare("SELECT m.id AS module_id,m.title AS module_title,m.position AS module_position,l.id AS lesson_id,l.title AS lesson_title,l.lesson_type,l.content_json,l.position AS lesson_position,l.is_preview FROM course_modules m JOIN course_lessons l ON l.module_id=m.id JOIN courses c ON c.id=m.course_id LEFT JOIN organizations o ON o.id=c.organization_id WHERE c.id=? AND c.status IN ('published','archived') AND (c.owner_type='proctify' OR o.status='verified') AND (c.status='published' OR (c.status='archived' AND ?=1)) AND (?=1 OR l.is_preview=1) ORDER BY m.position,l.position")
+      .bind(courseId, enrollment ? 1 : 0, enrollment ? 1 : 0).all();
     return json({ ok: true, enrolled: Boolean(enrollment), curriculum: rows.results || [] });
   }
 
@@ -416,7 +426,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   const enrollMatch = path.match(/^\/api\/courses\/([A-Za-z0-9-]+)\/enroll$/);
   if (method === "POST" && enrollMatch) {
-    const course = await env.DB.prepare("SELECT id,organization_id,price_minor,status FROM courses WHERE id=? AND status='published'").bind(enrollMatch[1]).first<{id:string;organization_id:string|null;price_minor:number;status:string}>();
+    const course = await env.DB.prepare("SELECT c.id,c.organization_id,c.price_minor,c.status FROM courses c LEFT JOIN organizations o ON o.id=c.organization_id WHERE c.id=? AND c.status='published' AND (c.owner_type='proctify' OR o.status='verified')").bind(enrollMatch[1]).first<{id:string;organization_id:string|null;price_minor:number;status:string}>();
     if (!course) return fail(404, "COURSE_NOT_AVAILABLE", "This course is not available for enrollment.");
     if (course.price_minor > 0) return fail(402, "CHECKOUT_REQUIRED", "This course requires checkout. Paid enrollment will be enabled when the payment provider is connected.");
     const enrollmentId = id();
@@ -430,7 +440,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     let body: any;
     try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check the progress update."); }
     const lessonId = String(body.lessonId || "");
-    const enrollment = await env.DB.prepare("SELECT e.id,e.course_id FROM enrollments e WHERE e.id=? AND e.learner_id=? AND e.status='active'").bind(progressMatch[1], actor.id).first<{id:string;course_id:string}>();
+    const enrollment = await env.DB.prepare("SELECT e.id,e.course_id FROM enrollments e JOIN courses c ON c.id=e.course_id LEFT JOIN organizations o ON o.id=c.organization_id WHERE e.id=? AND e.learner_id=? AND e.status='active' AND c.status IN ('published','archived') AND (c.owner_type='proctify' OR o.status='verified')").bind(progressMatch[1], actor.id).first<{id:string;course_id:string}>();
     if (!enrollment) return fail(404, "ENROLLMENT_NOT_FOUND", "This active enrollment was not found for your account.");
     const lesson = await env.DB.prepare("SELECT l.id FROM course_lessons l JOIN course_modules m ON m.id=l.module_id WHERE l.id=? AND m.course_id=?").bind(lessonId, enrollment.course_id).first();
     if (!lesson) return fail(404, "LESSON_NOT_IN_COURSE", "This lesson is not part of the enrolled course.");
@@ -444,7 +454,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const courseAssignmentsMatch = path.match(/^\/api\/courses\/([A-Za-z0-9-]+)\/assignments$/);
   if (method === "GET" && courseAssignmentsMatch) {
     const courseId = courseAssignmentsMatch[1];
-    const enrollment = await env.DB.prepare("SELECT e.id FROM enrollments e JOIN courses c ON c.id=e.course_id LEFT JOIN organizations o ON o.id=c.organization_id WHERE e.course_id=? AND e.learner_id=? AND e.status IN ('active','completed') AND c.status='published' AND (c.owner_type='proctify' OR o.status='verified')").bind(courseId, actor.id).first();
+    const enrollment = await env.DB.prepare("SELECT e.id FROM enrollments e JOIN courses c ON c.id=e.course_id LEFT JOIN organizations o ON o.id=c.organization_id WHERE e.course_id=? AND e.learner_id=? AND e.status IN ('active','completed') AND c.status IN ('published','archived') AND (c.owner_type='proctify' OR o.status='verified')").bind(courseId, actor.id).first();
     if (!enrollment) return fail(403, "ENROLLMENT_REQUIRED", "Enroll in this available course to view its assignments.");
     const rows = await env.DB.prepare("SELECT a.id,a.title,a.instructions,a.due_at,a.max_score,s.status AS submission_status,s.score,s.feedback,s.submitted_at FROM assignments a LEFT JOIN assignment_submissions s ON s.assignment_id=a.id AND s.learner_id=? WHERE a.course_id=? ORDER BY a.created_at ASC")
       .bind(actor.id, courseId).all();
@@ -474,7 +484,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (method === "POST" && submissionMatch) {
     let body: any;
     try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check your assignment response."); }
-    const assignment = await env.DB.prepare("SELECT a.id,a.course_id,a.due_at FROM assignments a WHERE a.id=?").bind(submissionMatch[1]).first<{id:string;course_id:string;due_at:string|null}>();
+    const assignment = await env.DB.prepare("SELECT a.id,a.course_id,a.due_at FROM assignments a JOIN courses c ON c.id=a.course_id LEFT JOIN organizations o ON o.id=c.organization_id WHERE a.id=? AND c.status IN ('published','archived') AND (c.owner_type='proctify' OR o.status='verified')").bind(submissionMatch[1]).first<{id:string;course_id:string;due_at:string|null}>();
     if (!assignment) return fail(404, "ASSIGNMENT_NOT_FOUND", "This assignment is not available.");
     const enrollment = await env.DB.prepare("SELECT id FROM enrollments WHERE course_id=? AND learner_id=? AND status IN ('active','completed')").bind(assignment.course_id, actor.id).first();
     if (!enrollment) return fail(403, "ENROLLMENT_REQUIRED", "Enroll in this course before submitting the assignment.");
