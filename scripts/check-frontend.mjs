@@ -13,7 +13,7 @@ assert.match(html, /aria-label="Main navigation"/, "main navigation must have an
 assert.match(html, /href="#\\/login\\/learner"/, "learner sign-in entry must exist");
 assert.match(html, /href="#\\/login\\/organization"/, "organization and educator sign-in entry must exist");
 assert.match(html, /href="#\\/login\\/admin"/, "Super Admin sign-in entry must exist");
-assert.match(html, /function LoginPage\\(role="learner"\\)/, "role-specific login page renderer must exist");
+assert.match(html, /function LoginPage\(role="learner"\)/, "role-specific login page renderer must exist");
 assert.match(html, /Sign-in connection is not active yet/, "unconfigured authentication must be clearly disclosed");
 
 assert.match(html, /Courses &amp; assessments/, "course and assessment catalog tab must be visible");
