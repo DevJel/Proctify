@@ -29,9 +29,12 @@ const fromB64Url = (value: string) => Uint8Array.from(atob(value.replace(/-/g, "
 async function digestHex(value: string) {
   return toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value))));
 }
-async function hmacBytes(secret: string, value: string) {
-  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+async function hmacRawKey(rawKey: Uint8Array, value: string) {
+  const key = await crypto.subtle.importKey("raw", rawKey, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value)));
+}
+async function hmacBytes(secret: string, value: string) {
+  return hmacRawKey(encoder.encode(secret), value);
 }
 async function hmacHex(secret: string, value: string) {
   return toHex(await hmacBytes(secret, value));
@@ -96,10 +99,10 @@ async function sesSendOtp(env: AuthEnv, to: string, code: string) {
   const scope = dateStamp + "/" + region + "/ses/aws4_request";
   const stringToSign = "AWS4-HMAC-SHA256\n" + amzDate + "\n" + scope + "\n" + await digestHex(canonicalRequest);
   const kDate = await hmacBytes("AWS4" + secretKey, dateStamp);
-  const kRegion = await hmacBytes(toHex(kDate), region);
-  const kService = await hmacBytes(toHex(kRegion), "ses");
-  const kSigning = await hmacBytes(toHex(kService), "aws4_request");
-  const signature = toHex(await hmacBytes(toHex(kSigning), stringToSign));
+  const kRegion = await hmacRawKey(kDate, region);
+  const kService = await hmacRawKey(kRegion, "ses");
+  const kSigning = await hmacRawKey(kService, "aws4_request");
+  const signature = toHex(await hmacRawKey(kSigning, stringToSign));
   headers.authorization = "AWS4-HMAC-SHA256 Credential=" + accessKey + "/" + scope + ", SignedHeaders=" + signedNames + ", Signature=" + signature;
   const response = await fetch("https://" + host + path, { method: "POST", headers, body: payload });
   if (!response.ok) {
@@ -223,13 +226,22 @@ async function handleVerify(request: Request, env: AuthEnv) {
     return authFail(400, "CODE_INVALID_OR_EXPIRED", "This code is invalid or expired. Request a new code.");
   }
   const audience = challenge.audience;
-  const user = await createUserForEmail(env, email, "");
-  if (!user || user.status !== "active") return authFail(403, "ACCOUNT_UNAVAILABLE", "This account is not active. Contact the platform administrator.");
+  let user = await env.DB.prepare("SELECT id,email,status,display_name FROM users WHERE email=? COLLATE NOCASE")
+    .bind(email).first<{ id: string; email: string; status: string; display_name: string }>();
   let role = "learner";
   let organizations: Array<{ id: string; name: string; slug: string; role: string }> = [];
-  if (audience === "organization") {
+  if (audience === "learner") {
+    if (!user) user = await createUserForEmail(env, email, "");
+    if (!user || user.status !== "active") return authFail(403, "ACCOUNT_UNAVAILABLE", "This account is not active. Contact the platform administrator.");
+  } else if (audience === "organization") {
     const owned = await env.DB.prepare("SELECT id FROM organizations WHERE owner_email=? COLLATE NOCASE AND status='verified'")
       .bind(email).all<{ id: string }>();
+    if (!user && !(owned.results || []).length) {
+      await env.DB.prepare("UPDATE auth_challenges SET consumed_at=CURRENT_TIMESTAMP WHERE id=? AND consumed_at IS NULL").bind(challengeId).run();
+      return authFail(403, "ORGANIZATION_ACCESS_REQUIRED", "This email is not an active member of a verified organization.");
+    }
+    if (!user) user = await createUserForEmail(env, email, "");
+    if (!user || user.status !== "active") return authFail(403, "ACCOUNT_UNAVAILABLE", "This account is not active. Contact the platform administrator.");
     for (const org of owned.results || []) {
       await env.DB.prepare("INSERT OR IGNORE INTO organization_members(organization_id,user_id,role,status) VALUES(?,?,'owner','active')")
         .bind(org.id, user.id).run();
@@ -243,7 +255,11 @@ async function handleVerify(request: Request, env: AuthEnv) {
       return authFail(403, "ORGANIZATION_ACCESS_REQUIRED", "This email is not an active member of a verified organization.");
     }
     role = organizations[0].role;
-  } else if (audience === "admin") {
+  } else {
+    if (!user || user.status !== "active") {
+      await env.DB.prepare("UPDATE auth_challenges SET consumed_at=CURRENT_TIMESTAMP WHERE id=? AND consumed_at IS NULL").bind(challengeId).run();
+      return authFail(403, "SUPER_ADMIN_REQUIRED", "This email is not authorized for Super Admin access.");
+    }
     const admin = await env.DB.prepare("SELECT status FROM platform_admins WHERE user_id=?").bind(user.id).first<{ status: string }>();
     if (!admin || admin.status !== "active") {
       await env.DB.prepare("UPDATE auth_challenges SET consumed_at=CURRENT_TIMESTAMP WHERE id=? AND consumed_at IS NULL").bind(challengeId).run();
