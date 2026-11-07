@@ -10,6 +10,12 @@ assert.match(html, /<link rel="manifest" href="manifest.webmanifest">/, "PWA man
 assert.match(html, /class="skip-link" href="#view"/, "keyboard skip link must exist");
 assert.match(html, /id="view"/, "main content target must exist");
 assert.match(html, /aria-label="Main navigation"/, "main navigation must have an accessible label");
+assert.ok(html.includes('href="#/login/learner"'), "learner sign-in entry must exist");
+assert.ok(html.includes('href="#/login/organization"'), "organization and educator sign-in entry must exist");
+assert.ok(html.includes('href="#/login/admin"'), "Super Admin sign-in entry must exist");
+assert.match(html, /function LoginPage\(role="learner"\)/, "role-specific login page renderer must exist");
+assert.match(html, /Sign-in connection is not active yet/, "unconfigured authentication must be clearly disclosed");
+
 assert.match(html, /Courses &amp; assessments/, "course and assessment catalog tab must be visible");
 assert.match(html, /My learning/, "learner results tab must be visible");
 assert.match(html, /My certificates/, "certificate tab must be visible");
