@@ -67,3 +67,15 @@ jobs:
             echo "Assessment protection trigger did not block a deletion"
             exit 1
           fi
+
+  frontend-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check responsive, accessible and installable frontend
+        run: node scripts/check-frontend.mjs
+      - name: Check service worker syntax
+        run: node --check sw.js

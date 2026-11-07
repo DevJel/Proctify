@@ -16,6 +16,10 @@ The latest GitHub Pages deployment workflow for the merged `main` commit reporte
 
 GitHub Pages publishes the static frontend from the repository root. It does not host the API, database, authentication, email delivery or payment processing.
 
+## Experience and access review
+
+- [Responsive, accessibility, PWA and authentication readiness review](docs/experience-access-review.md)
+
 ## LMS architecture
 
 See:

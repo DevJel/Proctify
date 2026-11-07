@@ -1,0 +1,33 @@
+{
+  "name": "PROCTORAVA — Learning Management System",
+  "short_name": "PROCTORAVA",
+  "description": "Learn, teach and manage courses with verified organisations, proctored assessments and digital certificates.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
+  "orientation": "any",
+  "background_color": "#FAF9F5",
+  "theme_color": "#FAF9F5",
+  "icons": [
+    {
+      "src": "assets/img/logo-mark-192.webp",
+      "sizes": "192x192",
+      "type": "image/webp",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/img/logo-mark.webp",
+      "sizes": "512x512",
+      "type": "image/webp",
+      "purpose": "any"
+    }
+  ],
+  "categories": [
+    "education",
+    "productivity"
+  ]
+}
