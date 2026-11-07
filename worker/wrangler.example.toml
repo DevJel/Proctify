@@ -1,24 +1,29 @@
-name = "proctify-lms-api"
+name = "proctorava-api"
 main = "src/index.ts"
 compatibility_date = "2026-11-07"
 
 [vars]
-APP_ORIGIN = "https://devjel.github.io"
-AUTH_ISSUER = "replace-with-approved-identity-issuer"
-AUTH_AUDIENCE = "proctify"
+APP_ORIGIN = "https://proctorava.pages.dev"
+AUTH_ISSUER = "https://proctorava-api.black-tooth-5474.workers.dev"
+AUTH_AUDIENCE = "proctorava"
+AWS_REGION = "ap-southeast-2"
+SES_FROM_EMAIL = "SET_TO_A_VERIFIED_SES_SENDER"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "proctify-db"
+database_name = "proctorava-db"
 database_id = "REPLACE_WITH_CREATED_D1_DATABASE_ID"
 migrations_dir = "migrations"
 
 [[r2_buckets]]
 binding = "ASSETS"
-bucket_name = "proctify-course-assets"
+bucket_name = "proctorava-course-assets"
 
-# Add secrets through the Cloudflare dashboard or Wrangler secret command.
+# Set private values only with Wrangler secrets or the Cloudflare dashboard.
 # Never commit actual values:
 # AUTH_JWT_SECRET
-# TURNSTILE_SECRET
-# PAYMENT_WEBHOOK_SECRET
+# AUTH_OTP_SECRET
+# AWS_ACCESS_KEY_ID
+# AWS_SECRET_ACCESS_KEY
+# AWS_SESSION_TOKEN (only for temporary AWS credentials)
+# TURNSTILE_SECRET (organization application verification)

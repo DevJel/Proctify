@@ -86,3 +86,26 @@ flowchart TD
   A --> T[Payments and Payouts]
   X --> F[Protected First-party Catalog]
 ```
+
+
+## Authentication service
+
+All three sign-in pages use the shared passwordless email OTP service. The service sends codes through SES, stores only keyed hashes and expiring challenges in D1, checks the account's server-side role, then creates a short-lived signed session. Each protected request checks the D1 session so logout can revoke access immediately.
+
+```mermaid
+flowchart TD
+  A[Choose learner, organization or admin] --> B[Request email code]
+  B --> C[Rate limit and save OTP hash in D1]
+  C --> D[Send via Amazon SES]
+  D --> E[Verify code]
+  E --> F{Server-side role check}
+  F -->|Learner| G[Active learner account]
+  F -->|Organization| H[Verified organization membership]
+  F -->|Admin| I[Private platform admin allow-list]
+  G --> J[Create D1 session and signed token]
+  H --> J
+  I --> J
+  J --> K[Protected API checks active session]
+```
+
+See [Authentication architecture](authentication-architecture.md) for exact API, session lifetime, rate limits, security requirements and production readiness. The production Worker and D1 still need provisioning before sign-in can be described as live.

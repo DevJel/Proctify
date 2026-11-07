@@ -1,3 +1,5 @@
+import { authenticate, handlePublicAuthRoute, type Actor } from "./auth";
+
 export interface Env {
   DB: D1Database;
   ASSETS: R2Bucket;
@@ -5,11 +7,15 @@ export interface Env {
   AUTH_ISSUER: string;
   AUTH_AUDIENCE: string;
   AUTH_JWT_SECRET?: string;
+  AUTH_OTP_SECRET?: string;
+  AWS_REGION?: string;
+  AWS_ACCESS_KEY_ID?: string;
+  AWS_SECRET_ACCESS_KEY?: string;
+  AWS_SESSION_TOKEN?: string;
+  SES_FROM_EMAIL?: string;
   TURNSTILE_SECRET?: string;
 }
 
-type Claims = { sub: string; email: string; email_verified: boolean; name?: string; iss: string; aud: string | string[]; exp: number };
-type Actor = { id: string; email: string; name: string };
 
 const json = (data: unknown, status = 200, headers: HeadersInit = {}) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers } });
@@ -20,8 +26,6 @@ const positionValue = (value: unknown) => {
   const number = value == null ? 0 : Number(value);
   return Number.isFinite(number) ? Math.max(0, Math.min(100_000, Math.floor(number))) : 0;
 };
-const b64url = (value: string) => btoa(value).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-const decodePart = (part: string) => JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - part.length % 4) % 4)));
 
 function corsHeaders(request: Request, env: Env): HeadersInit {
   const origin = request.headers.get("Origin") || "";
@@ -38,31 +42,6 @@ async function readJson(request: Request): Promise<any> {
   return JSON.parse(text || "{}");
 }
 
-async function authenticate(request: Request, env: Env): Promise<Actor | null> {
-  if (!env.AUTH_JWT_SECRET) return null;
-  const token = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
-  if (!token) return null;
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
-  try {
-    const header = decodePart(parts[0]);
-    const claims = decodePart(parts[1]) as Claims;
-    if (header.alg !== "HS256" || !claims.sub || !claims.email || claims.email_verified !== true || !Number.isFinite(claims.exp) || claims.exp <= Date.now() / 1000) return null;
-    if (!env.AUTH_ISSUER || !env.AUTH_AUDIENCE || claims.iss !== env.AUTH_ISSUER) return null;
-    const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
-    if (!audiences.includes(env.AUTH_AUDIENCE)) return null;
-    const email = claims.email.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
-    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.AUTH_JWT_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
-    const signed = new TextEncoder().encode(parts[0] + "." + parts[1]);
-    const signature = Uint8Array.from(atob(parts[2].replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - parts[2].length % 4) % 4)), c => c.charCodeAt(0));
-    if (!await crypto.subtle.verify("HMAC", key, signature, signed)) return null;
-    await env.DB.prepare("INSERT OR IGNORE INTO users(id,email,display_name) VALUES(?,?,?)").bind(claims.sub, email, String(claims.name || "").slice(0, 160)).run();
-    const user = await env.DB.prepare("SELECT email,status,display_name FROM users WHERE id=?").bind(claims.sub).first<{email:string;status:string;display_name:string}>();
-    if (!user || user.status !== "active" || user.email.toLowerCase() !== email) return null;
-    return { id: claims.sub, email, name: user.display_name || "" };
-  } catch { return null; }
-}
 
 async function requireMember(env: Env, actor: Actor, organizationId: string, roles: string[]) {
   const row = await env.DB.prepare("SELECT m.role,o.status FROM organization_members m JOIN organizations o ON o.id=m.organization_id WHERE m.organization_id=? AND m.user_id=? AND m.status='active'").bind(organizationId, actor.id).first<{ role: string; status: string }>();
@@ -99,9 +78,12 @@ async function route(request: Request, env: Env): Promise<Response> {
   const path = url.pathname.replace(/\/$/, "") || "/";
   const method = request.method.toUpperCase();
 
+  const publicAuthResponse = await handlePublicAuthRoute(request, env);
+  if (publicAuthResponse) return publicAuthResponse;
+
   if (method === "GET" && path === "/api/health") {
     await env.DB.prepare("SELECT 1 AS ready").first();
-    return json({ ok: true, service: "proctify-lms-api", mode: "connected", capabilities: { database: true, identity: Boolean(env.AUTH_JWT_SECRET), registration: Boolean(env.TURNSTILE_SECRET), payments: false, email: false } });
+    return json({ ok: true, service: "proctorava-api", mode: "connected", capabilities: { database: true, identity: Boolean(env.AUTH_JWT_SECRET && env.AUTH_OTP_SECRET), registration: Boolean(env.TURNSTILE_SECRET), payments: false, email: Boolean(env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY && env.SES_FROM_EMAIL) } });
   }
 
   if (method === "POST" && path === "/api/organization-applications") {
@@ -155,7 +137,24 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   const actor = await authenticate(request, env);
-  if (!actor) return fail(401, "AUTH_REQUIRED", "Please sign in with an approved Proctify account.");
+  if (!actor) return fail(401, "AUTH_REQUIRED", "Please sign in with an approved PROCTORAVA account.");
+
+  if (method === "POST" && path === "/api/auth/logout") {
+    if (!actor.sessionId) return fail(400, "SESSION_NOT_REVOCABLE", "This session cannot be revoked by this service.");
+    if (actor.sessionId) {
+      await env.DB.prepare("UPDATE auth_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND revoked_at IS NULL")
+        .bind(actor.sessionId, actor.id).run();
+    }
+    return json({ ok: true, signedOut: true });
+  }
+
+  if (method === "GET" && path === "/api/auth/me") {
+    const admin = await env.DB.prepare("SELECT status FROM platform_admins WHERE user_id=?")
+      .bind(actor.id).first<{ status: string }>();
+    const orgRows = await env.DB.prepare("SELECT o.id,o.name,o.slug,m.role FROM organization_members m JOIN organizations o ON o.id=m.organization_id WHERE m.user_id=? AND m.status='active' AND o.status='verified' ORDER BY o.name")
+      .bind(actor.id).all();
+    return json({ ok: true, user: { id: actor.id, email: actor.email, name: actor.name }, platformAdmin: admin?.status === "active", organizations: orgRows.results || [], session: { audience: actor.loginAudience || null } });
+  }
 
   if (method === "GET" && path === "/api/admin/organization-applications") {
     const admin = await env.DB.prepare("SELECT status FROM platform_admins WHERE user_id=?").bind(actor.id).first<{status:string}>();

@@ -48,3 +48,20 @@
 - The existing application is still an assessment-first frontend. It is not yet the complete multi-role LMS portal described in the architecture document.
 - The current Worker uses signed HS256 bearer tokens. Email OTP, WebAuthn passkeys, organization OIDC/SAML SSO, native app sign-in and session recovery are not implemented in the Worker.
 - The identity provider and email delivery service must be selected and configured before these sign-in methods can be safely activated. No login control should claim success before a real provider session is verified.
+
+
+## Authentication implementation update — 2026-11-07
+
+- Three role-specific login pages now submit email OTP requests and verify codes through the API.
+- Added `worker/src/auth.ts` for OTP HMAC storage, SES v2 signed delivery, JWT issuance, session checks and role authorization.
+- Added `worker/migrations/0004_auth_sessions.sql` for challenges and revocable sessions.
+- Added `GET /api/auth/me` and `POST /api/auth/logout`.
+- Added CI checks for the migration schema and frontend authentication contract.
+- Added [Authentication architecture](authentication-architecture.md) and mandatory [Agent handoff](agent-handoff.md).
+
+### Not yet production-provisioned
+- The connected Cloudflare account was checked and had no D1 databases or PROCTORAVA API Worker at the time of this review.
+- SES sender verification and AWS sending credentials have not been configured for this Worker.
+- The frontend API hostname is a target workers.dev address until the Worker is created and verified.
+- Cloudflare edge rate limits/bot protection and an independent Super Admin MFA factor remain release requirements.
+- Therefore the source implementation is not proof of live production authentication.
