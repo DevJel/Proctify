@@ -87,14 +87,13 @@ async function sesSendOtp(env: AuthEnv, to: string, code: string) {
   const payloadHash = await digestHex(payload);
   const headers: Record<string, string> = {
     "content-type": "application/json",
-    "host": host,
     "x-amz-content-sha256": payloadHash,
     "x-amz-date": amzDate
   };
   if (env.AWS_SESSION_TOKEN) headers["x-amz-security-token"] = env.AWS_SESSION_TOKEN;
-  const signedNames = Object.keys(headers).map(x => x.toLowerCase()).sort().join(";");
-  const canonicalHeaders = Object.keys(headers).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
-    .map(k => k.toLowerCase() + ":" + headers[k].trim() + "\n").join("");
+  const signedNames = ["content-type", "host", "x-amz-content-sha256", "x-amz-date", ...(env.AWS_SESSION_TOKEN ? ["x-amz-security-token"] : [])].join(";");
+  const canonicalHeaders = "content-type:application/json\nhost:" + host + "\nx-amz-content-sha256:" + payloadHash +
+    "\nx-amz-date:" + amzDate + "\n" + (env.AWS_SESSION_TOKEN ? "x-amz-security-token:" + env.AWS_SESSION_TOKEN + "\n" : "");
   const canonicalRequest = ["POST", path, "", canonicalHeaders, signedNames, payloadHash].join("\n");
   const scope = dateStamp + "/" + region + "/ses/aws4_request";
   const stringToSign = "AWS4-HMAC-SHA256\n" + amzDate + "\n" + scope + "\n" + await digestHex(canonicalRequest);
@@ -139,8 +138,8 @@ export async function authenticate(request: Request, env: AuthEnv): Promise<Acto
     const signature = fromB64Url(parts[2]);
     if (!await crypto.subtle.verify("HMAC", key, signature, encoder.encode(parts[0] + "." + parts[1]))) return null;
     if (claims.jti) {
-      const session = await env.DB.prepare("SELECT id FROM auth_sessions WHERE id=? AND user_id=? AND revoked_at IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')")
-        .bind(claims.jti, claims.sub).first();
+      const session = await env.DB.prepare("SELECT id FROM auth_sessions WHERE id=? AND user_id=? AND audience=? AND revoked_at IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')")
+        .bind(claims.jti, claims.sub, claims.login_audience || "").first();
       if (!session) return null;
     }
     await env.DB.prepare("INSERT OR IGNORE INTO users(id,email,display_name) VALUES(?,?,?)")
@@ -174,7 +173,7 @@ async function handleChallenge(request: Request, env: AuthEnv) {
   const organizationId = String(body.organizationId || "").trim() || null;
   if (!validEmail(email) || !validAudience(audience) || (organizationId && !/^[A-Za-z0-9-]{6,80}$/.test(organizationId)))
     return authFail(422, "INVALID_SIGN_IN_DETAILS", "Enter a valid email address and choose the correct sign-in page.");
-  if (!env.AUTH_OTP_SECRET || env.AUTH_OTP_SECRET.length < 32 || !env.AUTH_JWT_SECRET || env.AUTH_JWT_SECRET.length < 32)
+  if (!env.AUTH_OTP_SECRET || env.AUTH_OTP_SECRET.length < 32 || !env.AUTH_JWT_SECRET || env.AUTH_JWT_SECRET.length < 32 || !env.AUTH_ISSUER || !env.AUTH_AUDIENCE)
     return authFail(503, "AUTH_NOT_CONFIGURED", "Secure sign-in is not configured yet. Please contact the platform administrator.");
   const emailHash = await hmacHex(env.AUTH_OTP_SECRET, "email:" + email);
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
@@ -188,6 +187,8 @@ async function handleChallenge(request: Request, env: AuthEnv) {
   if (Number(recentEmail?.total || 0) >= 5 || Number(recentIp?.total || 0) >= 20 ||
       (last && Date.now() - new Date(last.created_at.replace(" ", "T") + "Z").getTime() < 60_000))
     return authFail(429, "TOO_MANY_REQUESTS", "Too many code requests. Wait a little before trying again.");
+  await env.DB.prepare("DELETE FROM auth_challenges WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ','now') OR created_at < datetime('now','-2 days')").run();
+  await env.DB.prepare("DELETE FROM auth_sessions WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%fZ','now') OR revoked_at < datetime('now','-7 days')").run();
   const code = randomCode();
   const challengeId = crypto.randomUUID();
   const codeHash = await hmacHex(env.AUTH_OTP_SECRET, "code:" + challengeId + ":" + emailHash + ":" + code);
