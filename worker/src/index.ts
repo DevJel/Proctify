@@ -646,6 +646,35 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ok:true,messageId},201);
   }
 
+
+  const learnerGroups = path.match(/^\\/api\\/learners\\/me\\/groups$/);
+  if (learnerGroups && method === "GET") {
+    const rows=await env.DB.prepare("SELECT g.id,g.name,g.section_code,g.subject,o.name AS organization_name FROM learning_group_learners gl JOIN learning_groups g ON g.id=gl.group_id JOIN organizations o ON o.id=g.organization_id WHERE gl.learner_id=? AND g.status='active' AND o.status='verified' ORDER BY g.name").bind(actor.id).all();
+    return json({ok:true,groups:rows.results||[]});
+  }
+  const learnerGroupAnnouncements = path.match(/^\\/api\\/learners\\/me\\/groups\\/([A-Za-z0-9-]+)\\/announcements$/);
+  if (learnerGroupAnnouncements && method === "GET") {
+    const groupId=learnerGroupAnnouncements[1];
+    const member=await env.DB.prepare("SELECT 1 AS ok FROM learning_group_learners gl JOIN learning_groups g ON g.id=gl.group_id JOIN organizations o ON o.id=g.organization_id WHERE gl.group_id=? AND gl.learner_id=? AND g.status='active' AND o.status='verified'").bind(groupId,actor.id).first();
+    if(!member)return fail(404,"GROUP_NOT_FOUND","This group is not available to your learner account.");
+    const rows=await env.DB.prepare("SELECT a.id,a.title,a.body,a.created_at,u.display_name AS sender_name FROM learning_group_announcements a JOIN users u ON u.id=a.sender_id WHERE a.group_id=? ORDER BY a.created_at DESC LIMIT 100").bind(groupId).all();
+    return json({ok:true,announcements:rows.results||[]});
+  }
+  const learnerGroupReply = path.match(/^\\/api\\/learners\\/me\\/groups\\/([A-Za-z0-9-]+)\\/messages$/);
+  if (learnerGroupReply && method === "POST") {
+    const groupId=learnerGroupReply[1];
+    const membership=await env.DB.prepare("SELECT g.organization_id FROM learning_group_learners gl JOIN learning_groups g ON g.id=gl.group_id JOIN organizations o ON o.id=g.organization_id WHERE gl.group_id=? AND gl.learner_id=? AND g.status='active' AND o.status='verified'").bind(groupId,actor.id).first<{organization_id:string}>();
+    if(!membership)return fail(404,"GROUP_NOT_FOUND","This group is not available to your learner account.");
+    let body:any;try{body=await readJson(request);}catch{return fail(400,"INVALID_JSON","Please check your message.");}
+    const educatorId=String(body.recipientId||"");
+    const educator=await env.DB.prepare("SELECT 1 AS ok FROM learning_group_educators WHERE group_id=? AND user_id=?").bind(groupId,educatorId).first();
+    if(!educator)return fail(404,"EDUCATOR_NOT_ASSIGNED","Choose an educator assigned to this group.");
+    const message=String(body.body||"").trim().slice(0,5000);if(!message)return fail(422,"MESSAGE_REQUIRED","Enter a message before sending.");
+    const messageId=id();
+    await env.DB.prepare("INSERT INTO learner_messages(id,organization_id,group_id,sender_id,recipient_id,subject,body) VALUES(?,?,?,?,?,?,?)").bind(messageId,membership.organization_id,groupId,actor.id,educatorId,String(body.subject||"").slice(0,180),message).run();
+    return json({ok:true,messageId},201);
+  }
+
   return fail(404, "NOT_FOUND", "This Proctify service route does not exist.");
 }
 
