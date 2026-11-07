@@ -22,6 +22,8 @@ Base path: `/api`. All API responses are JSON. The Worker is a separate deployme
 | `POST /organizations/{id}/courses/{courseId}/modules` | Add a curriculum module to a draft course | Owner, administrator, publisher or instructor |
 | `POST /organizations/{id}/modules/{moduleId}/lessons` | Add a lesson to a draft module | Owner, administrator, publisher or instructor |
 | `POST /organizations/{id}/courses/{courseId}/assignments` | Add an assignment to a draft course | Owner, administrator, publisher or assigned instructor |
+| `GET /organizations/{id}/members` | View active organization member directory | Owner or administrator |
+| `POST /organizations/{id}/members` | Add an existing verified Proctify account to the organization | Owner or administrator; only owner can assign administrators |
 | `POST /organizations/{id}/courses/{courseId}/staff` | Assign an existing organization instructor or reviewer to a course | Owner or administrator |
 | `GET /organizations/{id}/courses` | List courses visible to the signed-in organization member | Owner, administrator, publisher or assigned course staff |
 | `POST /organizations/{id}/assignments/{assignmentId}/review` | Grade and provide feedback on a submission | Owner, administrator or assigned instructor/reviewer |
