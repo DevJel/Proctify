@@ -19,6 +19,7 @@ Base path: `/api`. All API responses are JSON. The Worker is a separate deployme
 | `POST /organizations/{id}/claim` | Claim verified organization using matching verified email | Applicant matching organization owner email |
 | `POST /organizations/{id}/courses` | Create an organization-owned draft course | Owner, administrator or publisher |
 | `POST /organizations/{id}/courses/{courseId}/publish` | Publish a course after it has at least one module and lesson | Owner, administrator or publisher |
+| `POST /organizations/{id}/courses/{courseId}/archive` | Archive a published course while preserving current learner access | Owner, administrator or publisher |
 | `POST /organizations/{id}/courses/{courseId}/modules` | Add a curriculum module to a draft course | Owner, administrator, publisher or instructor |
 | `POST /organizations/{id}/modules/{moduleId}/lessons` | Add a lesson to a draft module | Owner, administrator, publisher or instructor |
 | `POST /organizations/{id}/courses/{courseId}/assignments` | Add an assignment to a draft course | Owner, administrator, publisher or assigned instructor |
