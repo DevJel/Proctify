@@ -30,11 +30,11 @@ Branding never transfers ownership. Every organization-owned record must be scop
 - Owner: full control of one organization.
 - Administrator: manage organization operations and members.
 - Publisher: create and publish courses for a verified organization.
-- Instructor: manage assigned courses and learner progress.
-- Reviewer: review course content and learner submissions.
+- Instructor: manage assigned courses and learner progress only after an organization administrator assigns them to each course.
+- Reviewer: review assigned course content and learner submissions only after an organization administrator assigns them to each course.
 - Super Admin: platform-wide access, protected separately and audited.
 
-Changing a URL or browser value must never grant a role. Authorization is checked by the API on every protected request.
+Changing a URL or browser value must never grant a role. Authorization is checked by the API on every protected request. Public course detail URLs use globally unique slugs to avoid collisions between organizations.
 
 ## Publishing lifecycle
 Draft → Published → Archived. A publisher must belong to a verified organization and have an active publisher-or-higher role. Public marketplace queries return only published courses from active, verified organizations, plus Proctify-owned first-party courses.
