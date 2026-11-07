@@ -59,3 +59,11 @@ The main navigation is now grouped into clear areas:
 - **Account:** Settings.
 
 The links use existing application routes. The Admin console remains protected by the current server-backed admin token flow. Organization and educator workspaces are not shown as active navigation destinations yet: their API foundation exists, but their complete signed-in screens and identity services still need to be connected. This avoids presenting unfinished areas as working features.
+
+## Separate login pages
+The application now has distinct entry pages:
+- Learner: `#/login/learner`
+- Organization and Educator: `#/login/organization`
+- Super Admin: `#/login/admin`
+
+These pages explain the intended audience and access method. They explicitly show that sign-in is not active until the production identity provider and email verification service are connected. The current API accepts verified, signed identity tokens but does not provide login-code delivery or a sign-in session endpoint. Do not collect passwords or codes in the frontend or treat the pages as authenticated access until those services are configured and tested.
