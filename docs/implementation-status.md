@@ -8,6 +8,11 @@
 - The existing admin preview uses a browser-entered admin token and explicitly notes that production needs a protected API and Cloudflare Access.
 - The existing frontend probes a relative `api/health` path. On the GitHub Pages project URL, this resolves under the `/Proctify/` path; a same-origin Worker route or an explicit API base URL is required before the frontend can use the new Worker.
 
+## Hosting status checked during this review
+- The LMS validation workflow on the follow-up branch passes its Worker type check and both D1 migration checks.
+- The GitHub Pages deployment workflow for the merged `main` commit `0aa59e63ba5da63e080d756566793ed58507e0d1` reports failure. The available job-log connector did not return its deployment error, so the cause is not confirmed. Verify the GitHub Pages repository setting and deployment environment before treating the public site as updated.
+- The follow-up security and course-management improvements are in draft Pull Request #2 and are not yet part of `main`.
+
 ## Not verified as production services
 - No Worker source, D1 migration, R2 binding, identity provider configuration, SES integration, or payment webhook was present on the inspected `main` branch.
 - The GitHub Pages workflow only deploys static files; it does not deploy a Cloudflare Worker.
