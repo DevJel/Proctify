@@ -12,7 +12,7 @@ By Operava Global Solutions.
 
 The frontend is hosted by Cloudflare Pages in the **Proctorava and HRIS app** Cloudflare account. The project is connected to this repository and deploys the `main` branch automatically. GitHub Pages deployment has been removed; GitHub remains the source-code repository only.
 
-Cloudflare Pages hosts the static frontend. The authentication API source and D1 migration are now included in this implementation branch; the production Worker, D1 database and SES delivery still require provisioning and end-to-end verification. Payments remain a separate integration.
+Cloudflare Pages hosts the static frontend. The authentication API source and D1 migration are merged. The production Worker, D1 database and SES delivery still require provisioning and end-to-end verification. Add the AWS SES API credentials to Cloudflare Worker secret storage; do not commit credentials. The current Worker uses the SES HTTPS API, not SMTP. Payments remain a separate integration.
 
 ## Experience and access review
 
