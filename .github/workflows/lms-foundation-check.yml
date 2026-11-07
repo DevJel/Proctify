@@ -35,6 +35,10 @@ jobs:
         run: sqlite3 /tmp/proctify-test.db < worker/migrations/0001_lms_foundation.sql
       - name: Apply marketplace and course-access migration
         run: sqlite3 /tmp/proctify-test.db < worker/migrations/0002_course_access_and_marketplace.sql
+      - name: Apply educator groups and communication migration
+        run: sqlite3 /tmp/proctify-test.db < worker/migrations/0003_educator_groups_and_communication.sql
+      - name: Confirm educator group tables and organization boundaries exist
+        run: test "$(sqlite3 /tmp/proctify-test.db "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('learning_groups','learning_group_educators','learning_group_learners','learning_group_courses','learning_group_activities','learning_group_announcements','learner_messages');")" = "7"
       - name: Confirm all twelve Proctify-owned assessments are present
         run: test "$(sqlite3 /tmp/proctify-test.db "SELECT COUNT(*) FROM proctify_assessments;")" = "12"
       - name: Confirm marketplace course addresses are globally unique
