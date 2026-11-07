@@ -83,7 +83,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   if (method === "GET" && path === "/api/health") {
     await env.DB.prepare("SELECT 1 AS ready").first();
-    return json({ ok: true, service: "proctify-lms-api", mode: "connected", capabilities: { database: true, identity: Boolean(env.AUTH_JWT_SECRET && env.AUTH_OTP_SECRET), registration: Boolean(env.TURNSTILE_SECRET), payments: false, email: Boolean(env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY && env.SES_FROM_EMAIL) } });
+    return json({ ok: true, service: "proctorava-api", mode: "connected", capabilities: { database: true, identity: Boolean(env.AUTH_JWT_SECRET && env.AUTH_OTP_SECRET), registration: Boolean(env.TURNSTILE_SECRET), payments: false, email: Boolean(env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY && env.SES_FROM_EMAIL) } });
   }
 
   if (method === "POST" && path === "/api/organization-applications") {
@@ -140,6 +140,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (!actor) return fail(401, "AUTH_REQUIRED", "Please sign in with an approved PROCTORAVA account.");
 
   if (method === "POST" && path === "/api/auth/logout") {
+    if (!actor.sessionId) return fail(400, "SESSION_NOT_REVOCABLE", "This session cannot be revoked by this service.");
     if (actor.sessionId) {
       await env.DB.prepare("UPDATE auth_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND revoked_at IS NULL")
         .bind(actor.sessionId, actor.id).run();
