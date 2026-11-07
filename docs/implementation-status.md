@@ -15,7 +15,9 @@
 
 ## This implementation branch
 - Adds an initial D1 LMS schema, including organization applications, verified organizations, organization membership, courses, curriculum, enrollments, progress, assignments, assessments, certificates, orders, publisher ledger, payouts, reviews, and audit records.
-- Adds a Worker API foundation for health, Turnstile-protected organization applications, marketplace course discovery, organization claiming, course drafting and publishing, certificate lookup, and Super Admin application decisions.
+- Adds a Worker API foundation for health, Turnstile-protected organization applications, marketplace course discovery, globally unique course addresses, organization claiming and verification, course drafting and publishing, assigned course staff, learner enrollment summaries, free enrollment, preview-aware curriculum access, lesson progress, assignment creation/submission/review, read-only Proctify assessment catalog and certificate lookup.
+- Strengthens authentication to require a signed verified-email claim and rejects suspended/deleted accounts without silently overwriting account email addresses.
+- Makes organization verification and its audit record a single database batch; masks learner surnames on public certificate verification.
 - Adds architecture and deployment guidance.
 - Does not claim that the Worker, database, email, identity issuer, payment provider, or production login portals are configured or live.
 
@@ -23,10 +25,10 @@
 1. Create the D1 database and R2 bucket, then set the real database ID in a private Wrangler configuration.
 2. Configure an approved identity issuer and JWT signing secret.
 3. Configure Turnstile and edge rate limits.
-4. Add the first Super Admin through a controlled, audited bootstrap procedure.
+4. Add the first Super Admin through a controlled, audited bootstrap procedure; ensure the identity issuer signs `email_verified: true` into access tokens.
 5. Configure SES delivery for verification and account notices.
 6. Select and configure a payment provider, signed webhooks, refunds and payouts.
 7. Connect the existing frontend to the Worker and implement the three role-specific login experiences.
 8. Configure a same-origin Worker route or explicit frontend API base URL; the current relative health check is not yet connected to this Worker.
-9. Implement and test the three role-specific login screens and complete learning/payment endpoints.
+9. Implement and test the three role-specific login screens, SES email verification, course asset delivery, certificate issuance/revocation and complete payment endpoints.
 10. Run migrations, type checks, API tests, access-control tests, browser checks and restore testing before enabling production traffic.
