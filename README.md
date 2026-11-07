@@ -8,13 +8,11 @@ By Operava Global Solutions.
 
 ## Current application
 
-The existing assessment experience and its visual assets are preserved as the baseline. The current static preview is available at:
+**Production site: https://proctorava.pages.dev**
 
-**https://devjel.github.io/Proctify/**
+The frontend is hosted by Cloudflare Pages in the **Proctorava and HRIS app** Cloudflare account. The project is connected to this repository and deploys the `main` branch automatically. GitHub Pages deployment has been removed; GitHub remains the source-code repository only.
 
-The latest GitHub Pages deployment workflow for the merged `main` commit reported failure. Verify the deployment in GitHub Actions before assuming the live site reflects the latest repository changes.
-
-GitHub Pages publishes the static frontend from the repository root. It does not host the API, database, authentication, email delivery or payment processing.
+Cloudflare Pages hosts the static frontend. The API, database, authentication, email delivery and payment services remain separate and must be configured and deployed independently.
 
 ## Experience and access review
 
