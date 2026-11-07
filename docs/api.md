@@ -21,7 +21,13 @@ Base path: `/api`. All API responses are JSON. The Worker is a separate deployme
 | `POST /organizations/{id}/courses/{courseId}/publish` | Publish a course after it has at least one module and lesson | Owner, administrator or publisher |
 | `POST /organizations/{id}/courses/{courseId}/modules` | Add a curriculum module to a draft course | Owner, administrator, publisher or instructor |
 | `POST /organizations/{id}/modules/{moduleId}/lessons` | Add a lesson to a draft module | Owner, administrator, publisher or instructor |
-| `POST /organizations/{id}/courses/{courseId}/assignments` | Add an assignment to a draft course | Owner, administrator, publisher or instructor |
+| `POST /organizations/{id}/courses/{courseId}/assignments` | Add an assignment to a draft course | Owner, administrator, publisher or assigned instructor |
+| `POST /organizations/{id}/courses/{courseId}/staff` | Assign an existing organization instructor or reviewer to a course | Owner or administrator |
+| `GET /organizations/{id}/courses` | List courses visible to the signed-in organization member | Owner, administrator, publisher or assigned course staff |
+| `POST /organizations/{id}/assignments/{assignmentId}/review` | Grade and provide feedback on a submission | Owner, administrator or assigned instructor/reviewer |
+| `GET /learners/me/enrollments` | List the learner's courses and lesson completion counts | Signed-in learner |
+| `GET /courses/{courseId}/assignments` | View assignments and own submission status | Enrolled learner |
+| `GET /assessments/catalog` | List the Proctify-owned assessment catalog | Public; read-only |
 | `GET /courses/{courseId}/curriculum` | Read published curriculum; non-enrolled learners see preview lessons only | Signed-in learner |
 | `POST /courses/{courseId}/enroll` | Enroll in a free published course | Signed-in learner |
 | `POST /enrollments/{id}/progress` | Save lesson progress for the signed-in learner | Enrollment owner |
@@ -50,8 +56,8 @@ Protected endpoints require a bearer token signed with HS256 by the configured i
 - subject and email;
 - expiration.
 
-The token issuer must verify the user's email before issuing a token. The Worker stores the authenticated user identity and checks organization membership in D1 on each organization action. Super Admin status is read from the private `platform_admins` table; it is not accepted from a browser role selector or untrusted token claim.
+The token issuer must verify the user's email and include the signed `email_verified: true` claim before issuing a token. The Worker stores a new user only after token verification, then checks that the account is still active on every request. It does not silently reactivate suspended accounts or overwrite an existing account's email. Organization membership and assigned course-staff access are checked in D1 on each organization action. Super Admin status is read from the private `platform_admins` table; it is not accepted from a browser role selector or untrusted token claim.
 
 ## Current implementation limits
 
-This is an API foundation, not a complete LMS service. Course module/lesson/assignment editing, free enrollment, preview-aware curriculum access, lesson progress and assignment submission are included. Assignment grading, assessment-session integration, email OTP delivery, SES notifications, payment checkout/webhooks, payout execution, custom-domain routing, file upload/download signing, and the final three login screens still require implementation and provider configuration. Paid course enrollment returns a clear checkout-required response until a payment provider is connected. Payment status must never be accepted from a browser request.
+This is an API foundation, not a complete LMS service. Course module/lesson/assignment editing, free enrollment, preview-aware curriculum access, lesson progress, assignment submission and review, organization course lists, assigned course staff, learner enrollment summaries and a read-only Proctify assessment catalog are included. Assignment grading, assessment-session integration, email OTP delivery, SES notifications, payment checkout/webhooks, payout execution, custom-domain routing, file upload/download signing, and the final three login screens still require implementation and provider configuration. Paid course enrollment returns a clear checkout-required response until a payment provider is connected. Payment status must never be accepted from a browser request.
