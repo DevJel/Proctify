@@ -12,6 +12,8 @@ The existing assessment experience and its visual assets are preserved as the ba
 
 **https://devjel.github.io/Proctify/**
 
+The latest GitHub Pages deployment workflow for the merged `main` commit reported failure. Verify the deployment in GitHub Actions before assuming the live site reflects the latest repository changes.
+
 GitHub Pages publishes the static frontend from the repository root. It does not host the API, database, authentication, email delivery or payment processing.
 
 ## LMS architecture
@@ -47,4 +49,4 @@ External services and connectors must remain behind clearly defined service boun
 
 ---
 
-**MCP-ISO connector note:** The MCP-ISO connector is not exposed in the current connected tool set, so no live connector use is claimed for this change. Keep any future connector-specific setup, adapters or exceptions documented here in the README footer; do not mix connector-specific code into the application UI or core logic.
+**MCP-ISO connector note:** The connector is not available in the current connected tool set, so no live MCP-ISO connection is claimed. Keep any future connector-specific setup or exceptions documented here in this README footer; do not mix connector-specific code into the application UI or core logic.

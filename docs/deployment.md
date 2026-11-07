@@ -8,7 +8,7 @@ GitHub Pages deploys the static frontend from the repository root when changes r
 2. Create the D1 database named `proctify-db` and place its actual ID in the private configuration.
 3. Create the R2 bucket `proctify-course-assets`.
 4. Install the Worker dependencies from the `worker` directory.
-5. Apply the migration locally, inspect the schema, then apply it to the remote D1 database.
+5. Apply migrations locally in order (`0001_lms_foundation.sql`, then `0002_course_access_and_marketplace.sql`), inspect the schema, then apply all migrations to the remote D1 database.
 6. Configure the identity issuer, audience, allowed frontend origins, and encrypted secrets.
 7. Configure Turnstile and Cloudflare edge rate limits for public registration and authentication endpoints.
 8. Deploy the Worker only after the local API and authorization tests pass.
@@ -18,7 +18,7 @@ GitHub Pages deploys the static frontend from the repository root when changes r
 - `AUTH_JWT_SECRET`: private HMAC signing secret shared only with the approved identity issuer and Worker.
 - `TURNSTILE_SECRET`: private Turnstile secret.
 - `APP_ORIGIN`: exact comma-separated allowed frontend origins.
-- `AUTH_ISSUER` and `AUTH_AUDIENCE`: exact values expected in verified login tokens.
+- `AUTH_ISSUER` and `AUTH_AUDIENCE`: exact values expected in verified login tokens. Tokens must include a signed boolean `email_verified: true` claim.
 - Payment webhook signing secret: add only after a provider is selected.
 - SES credentials: use a protected secret store or a narrowly scoped sending integration; never place them in frontend code.
 

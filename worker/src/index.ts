@@ -1,5 +1,6 @@
 export interface Env {
   DB: D1Database;
+  ASSETS: R2Bucket;
   APP_ORIGIN: string;
   AUTH_ISSUER: string;
   AUTH_AUDIENCE: string;
@@ -7,7 +8,7 @@ export interface Env {
   TURNSTILE_SECRET?: string;
 }
 
-type Claims = { sub: string; email: string; name?: string; iss: string; aud: string | string[]; exp: number };
+type Claims = { sub: string; email: string; email_verified: boolean; name?: string; iss: string; aud: string | string[]; exp: number };
 type Actor = { id: string; email: string; name: string };
 
 const json = (data: unknown, status = 200, headers: HeadersInit = {}) =>
@@ -15,6 +16,10 @@ const json = (data: unknown, status = 200, headers: HeadersInit = {}) =>
 const fail = (status: number, code: string, message: string) => json({ ok: false, error: { code, message } }, status);
 const id = () => crypto.randomUUID();
 const slugify = (value: string) => value.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 70);
+const positionValue = (value: unknown) => {
+  const number = value == null ? 0 : Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(100_000, Math.floor(number))) : 0;
+};
 const b64url = (value: string) => btoa(value).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 const decodePart = (part: string) => JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - part.length % 4) % 4)));
 
@@ -42,16 +47,20 @@ async function authenticate(request: Request, env: Env): Promise<Actor | null> {
   try {
     const header = decodePart(parts[0]);
     const claims = decodePart(parts[1]) as Claims;
-    if (header.alg !== "HS256" || !claims.sub || !claims.email || claims.exp <= Date.now() / 1000) return null;
-    if (claims.iss !== env.AUTH_ISSUER) return null;
+    if (header.alg !== "HS256" || !claims.sub || !claims.email || claims.email_verified !== true || !Number.isFinite(claims.exp) || claims.exp <= Date.now() / 1000) return null;
+    if (!env.AUTH_ISSUER || !env.AUTH_AUDIENCE || claims.iss !== env.AUTH_ISSUER) return null;
     const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
     if (!audiences.includes(env.AUTH_AUDIENCE)) return null;
+    const email = claims.email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
     const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.AUTH_JWT_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
     const signed = new TextEncoder().encode(parts[0] + "." + parts[1]);
     const signature = Uint8Array.from(atob(parts[2].replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - parts[2].length % 4) % 4)), c => c.charCodeAt(0));
     if (!await crypto.subtle.verify("HMAC", key, signature, signed)) return null;
-    await env.DB.prepare("INSERT INTO users(id,email,display_name) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET email=excluded.email, display_name=excluded.display_name, updated_at=CURRENT_TIMESTAMP").bind(claims.sub, claims.email.toLowerCase(), claims.name || "").run();
-    return { id: claims.sub, email: claims.email.toLowerCase(), name: claims.name || "" };
+    await env.DB.prepare("INSERT OR IGNORE INTO users(id,email,display_name) VALUES(?,?,?)").bind(claims.sub, email, String(claims.name || "").slice(0, 160)).run();
+    const user = await env.DB.prepare("SELECT email,status,display_name FROM users WHERE id=?").bind(claims.sub).first<{email:string;status:string;display_name:string}>();
+    if (!user || user.status !== "active" || user.email.toLowerCase() !== email) return null;
+    return { id: claims.sub, email, name: user.display_name || "" };
   } catch { return null; }
 }
 
@@ -60,14 +69,29 @@ async function requireMember(env: Env, actor: Actor, organizationId: string, rol
   return !!row && row.status === "verified" && roles.includes(row.role);
 }
 
+async function requireCourseAccess(env: Env, actor: Actor, organizationId: string, courseId: string, organizationRoles: string[], courseRoles: string[]) {
+  const member = await env.DB.prepare("SELECT m.role,o.status FROM organization_members m JOIN organizations o ON o.id=m.organization_id WHERE m.organization_id=? AND m.user_id=? AND m.status='active'")
+    .bind(organizationId, actor.id).first<{role:string;status:string}>();
+  if (!member || member.status !== "verified") return false;
+  if (organizationRoles.includes(member.role)) return true;
+  if (!courseRoles.includes(member.role)) return false;
+  const staff = await env.DB.prepare("SELECT role FROM course_staff WHERE course_id=? AND user_id=?").bind(courseId, actor.id).first<{role:string}>();
+  return !!staff && courseRoles.includes(staff.role);
+}
+
 async function verifyTurnstile(request: Request, env: Env, token: string) {
   if (!env.TURNSTILE_SECRET || !token) return false;
   const body = new URLSearchParams({ secret: env.TURNSTILE_SECRET, response: token });
   const ip = request.headers.get("CF-Connecting-IP");
   if (ip) body.set("remoteip", ip);
   const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", { method: "POST", body });
-  const result = await response.json() as { success?: boolean };
-  return response.ok && result.success === true;
+  const result = await response.json() as { success?: boolean; hostname?: string; action?: string };
+  const origin = request.headers.get("Origin");
+  let expectedHostname = new URL(request.url).hostname;
+  if (origin) {
+    try { expectedHostname = new URL(origin).hostname; } catch { return false; }
+  }
+  return response.ok && result.success === true && result.hostname === expectedHostname && (!result.action || result.action === "organization_application");
 }
 
 async function route(request: Request, env: Env): Promise<Response> {
@@ -101,6 +125,11 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, applicationId, status: "pending", message: "Your organization application has been received. Publishing remains locked until verification." }, 201);
   }
 
+  if (method === "GET" && path === "/api/assessments/catalog") {
+    const catalog = await env.DB.prepare("SELECT assessment_id,title,category,catalog_version FROM proctify_assessments WHERE active=1 ORDER BY category,title").all();
+    return json({ ok: true, owner: "Proctify", assessments: catalog.results || [] });
+  }
+
   if (method === "GET" && path === "/api/marketplace/courses") {
     const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 24), 1), 60);
     const query = "%" + String(url.searchParams.get("q") || "").trim().slice(0, 80) + "%";
@@ -119,7 +148,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 
   const certificateMatch = path.match(/^\/api\/certificates\/([A-Za-z0-9-]{6,100})$/);
   if (method === "GET" && certificateMatch) {
-    const certificate = await env.DB.prepare("SELECT c.verification_code,c.title,c.issued_at,c.expires_at,c.revoked_at,u.display_name AS learner_name,o.name AS issuer_name FROM certificates c JOIN users u ON u.id=c.learner_id LEFT JOIN organizations o ON o.id=c.organization_id WHERE c.verification_code=?").bind(certificateMatch[1]).first();
+    const certificate = await env.DB.prepare("SELECT c.verification_code,c.title,c.issued_at,c.expires_at,c.revoked_at,u.display_name AS learner_name,CASE WHEN c.issuer_type='proctify' THEN 'Proctify' ELSE o.name END AS issuer_name FROM certificates c JOIN users u ON u.id=c.learner_id LEFT JOIN organizations o ON o.id=c.organization_id WHERE c.verification_code=?").bind(certificateMatch[1]).first();
     if (!certificate) return fail(404, "CERTIFICATE_NOT_FOUND", "No certificate matches this verification code.");
     const record = certificate as any;
     return json({ ok: true, certificate: { ...record, valid: !record.revoked_at && (!record.expires_at || new Date(record.expires_at).getTime() > Date.now()) } });
@@ -131,7 +160,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (method === "GET" && path === "/api/admin/organization-applications") {
     const admin = await env.DB.prepare("SELECT status FROM platform_admins WHERE user_id=?").bind(actor.id).first<{status:string}>();
     if (!admin || admin.status !== "active") return fail(403, "SUPER_ADMIN_REQUIRED", "This action is restricted to Proctify Super Admins.");
-    const rows = await env.DB.prepare("SELECT id,organization_name,slug,organization_type,applicant_name,applicant_email,website,country_code,verification_status,created_at FROM organization_applications WHERE verification_status IN ('pending','in_review') ORDER BY created_at ASC LIMIT 100").all();
+    const rows = await env.DB.prepare("SELECT id,organization_name,slug,organization_type,applicant_name,applicant_email,website,country_code,registration_reference,verification_status,created_at FROM organization_applications WHERE verification_status IN ('pending','in_review') ORDER BY created_at ASC LIMIT 100").all();
     return json({ ok: true, applications: rows.results || [] });
   }
 
@@ -148,21 +177,27 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (decision === "verify") {
       const organizationId = id();
       try {
-        await env.DB.prepare("INSERT INTO organizations(id,application_id,name,slug,organization_type,owner_email) VALUES(?,?,?,?,?,?)")
-          .bind(organizationId, application.id, application.organization_name, application.slug, application.organization_type, application.applicant_email).run();
+        const results = await env.DB.batch([
+          env.DB.prepare("INSERT INTO organizations(id,application_id,name,slug,organization_type,owner_email) SELECT ?,id,organization_name,slug,organization_type,applicant_email FROM organization_applications WHERE id=? AND verification_status IN ('pending','in_review')")
+            .bind(organizationId, application.id),
+          env.DB.prepare("UPDATE organization_applications SET verification_status='verified',reviewer_id=?,reviewer_note=?,reviewed_at=CURRENT_TIMESTAMP WHERE id=? AND verification_status IN ('pending','in_review')")
+            .bind(actor.id, String(body.note || "").slice(0, 1000), application.id),
+          env.DB.prepare("INSERT INTO audit_logs(id,actor_id,action,target_type,target_id,detail_json) SELECT ?,?,?,?, ?,? WHERE EXISTS (SELECT 1 FROM organization_applications WHERE id=? AND verification_status='verified' AND reviewer_id=?)")
+            .bind(id(), actor.id, "organization.verified", "organization_application", application.id, JSON.stringify({organizationId}), application.id, actor.id)
+        ]);
+        if (!results[0].meta.changes || !results[1].meta.changes) return fail(409, "APPLICATION_ALREADY_REVIEWED", "This application has already been reviewed or could not be verified.");
       } catch {
-        return fail(409, "ORGANIZATION_CONFLICT", "An organization with this name or address already exists.");
+        return fail(409, "ORGANIZATION_CONFLICT", "The organization could not be created. Check whether its name or address is already in use.");
       }
-      await env.DB.prepare("UPDATE organization_applications SET verification_status='verified',reviewer_id=?,reviewer_note=?,reviewed_at=CURRENT_TIMESTAMP WHERE id=?")
-        .bind(actor.id, String(body.note || "").slice(0, 1000), application.id).run();
-      await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,action,target_type,target_id,detail_json) VALUES(?,?,?,?,?,?)")
-        .bind(id(), actor.id, "organization.verified", "organization_application", application.id, JSON.stringify({organizationId})).run();
       return json({ ok: true, status: "verified", organizationId });
     }
-    await env.DB.prepare("UPDATE organization_applications SET verification_status='rejected',reviewer_id=?,reviewer_note=?,reviewed_at=CURRENT_TIMESTAMP WHERE id=?")
-      .bind(actor.id, String(body.note || "").slice(0, 1000), application.id).run();
-    await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,action,target_type,target_id) VALUES(?,?,?,?,?)")
-      .bind(id(), actor.id, "organization.rejected", "organization_application", application.id).run();
+    const rejected = await env.DB.batch([
+      env.DB.prepare("UPDATE organization_applications SET verification_status='rejected',reviewer_id=?,reviewer_note=?,reviewed_at=CURRENT_TIMESTAMP WHERE id=? AND verification_status IN ('pending','in_review')")
+        .bind(actor.id, String(body.note || "").slice(0, 1000), application.id),
+      env.DB.prepare("INSERT INTO audit_logs(id,actor_id,action,target_type,target_id) SELECT ?,?,?,?,? WHERE EXISTS (SELECT 1 FROM organization_applications WHERE id=? AND verification_status='rejected' AND reviewer_id=?)")
+        .bind(id(), actor.id, "organization.rejected", "organization_application", application.id, application.id, actor.id)
+    ]);
+    if (!rejected[0].meta.changes) return fail(409, "APPLICATION_ALREADY_REVIEWED", "This application has already been reviewed.");
     return json({ ok: true, status: "rejected" });
   }
 
@@ -170,8 +205,43 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (method === "POST" && claimMatch) {
     const org = await env.DB.prepare("SELECT id,owner_email,status FROM organizations WHERE id=?").bind(claimMatch[1]).first<{id:string;owner_email:string;status:string}>();
     if (!org || org.status !== "verified" || org.owner_email.toLowerCase() !== actor.email) return fail(403, "CLAIM_NOT_ALLOWED", "This organization cannot be claimed by this account.");
-    await env.DB.prepare("INSERT OR IGNORE INTO organization_members(organization_id,user_id,role,status) VALUES(?,?, 'owner','active')").bind(org.id, actor.id).run();
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO organization_members(organization_id,user_id,role,status) VALUES(?,?, 'owner','active') ON CONFLICT(organization_id,user_id) DO UPDATE SET role='owner',status='active'")
+        .bind(org.id, actor.id),
+      env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id) VALUES(?,?,?,?,?,?)")
+        .bind(id(), actor.id, org.id, "organization.owner.claimed", "organization", org.id)
+    ]);
     return json({ ok: true, organizationId: org.id, role: "owner" });
+  }
+
+  const membersMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/members$/);
+  if (method === "GET" && membersMatch) {
+    const orgId = membersMatch[1];
+    if (!await requireMember(env, actor, orgId, ["owner","administrator"])) return fail(403, "MEMBER_ADMIN_REQUIRED", "Only organization owners and administrators can view the member directory.");
+    const members = await env.DB.prepare("SELECT u.id,u.email,u.display_name,u.status AS account_status,m.role,m.status,m.created_at FROM organization_members m JOIN users u ON u.id=m.user_id WHERE m.organization_id=? ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'administrator' THEN 1 WHEN 'publisher' THEN 2 WHEN 'instructor' THEN 3 WHEN 'reviewer' THEN 4 ELSE 5 END,u.display_name LIMIT 250")
+      .bind(orgId).all();
+    return json({ ok: true, members: members.results || [] });
+  }
+
+  if (method === "POST" && membersMatch) {
+    const orgId = membersMatch[1];
+    const owner = await requireMember(env, actor, orgId, ["owner"]);
+    const admin = owner || await requireMember(env, actor, orgId, ["administrator"]);
+    if (!admin) return fail(403, "MEMBER_ADMIN_REQUIRED", "Only organization owners and administrators can add members.");
+    let body: any;
+    try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check the member details."); }
+    const email = String(body.email || "").trim().toLowerCase();
+    const role = String(body.role || "");
+    const allowed = owner ? ["administrator","publisher","instructor","reviewer","learner"] : ["publisher","instructor","reviewer","learner"];
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !allowed.includes(role)) return fail(422, "INVALID_MEMBER", "Enter a verified account email and a role you are allowed to assign.");
+    const user = await env.DB.prepare("SELECT id FROM users WHERE email=? COLLATE NOCASE AND status='active'").bind(email).first<{id:string}>();
+    if (!user) return fail(404, "ACCOUNT_NOT_FOUND", "The person must first create and verify a Proctify learner account.");
+    const result = await env.DB.prepare("INSERT INTO organization_members(organization_id,user_id,role,status) VALUES(?,?,?,'active') ON CONFLICT(organization_id,user_id) DO UPDATE SET role=excluded.role,status='active' WHERE organization_members.role!='owner'")
+      .bind(orgId, user.id, role).run();
+    if (!result.meta.changes) return fail(409, "OWNER_PROTECTED", "The organization owner role cannot be changed from the member directory.");
+    await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id,detail_json) VALUES(?,?,?,?,?,?,?)")
+      .bind(id(), actor.id, orgId, "organization.member.added_or_updated", "organization_member", user.id, JSON.stringify({email,role})).run();
+    return json({ ok: true, userId: user.id, email, role }, 201);
   }
 
   const createCourse = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses$/);
@@ -183,11 +253,72 @@ async function route(request: Request, env: Env): Promise<Response> {
     const title = String(body.title || "").trim().slice(0, 180);
     const slug = slugify(String(body.slug || title));
     if (!title || !slug) return fail(422, "COURSE_DETAILS_REQUIRED", "A course title is required.");
+    const priceMinor = body.priceMinor == null ? 0 : Number(body.priceMinor);
+    const currency = String(body.currency || "USD").toUpperCase();
+    if (!Number.isSafeInteger(priceMinor) || priceMinor < 0 || !/^[A-Z]{3}$/.test(currency)) return fail(422, "INVALID_PRICE", "Enter a valid whole-number price in minor currency units and a three-letter currency code.");
     const courseId = id();
-    await env.DB.prepare("INSERT INTO courses(id,organization_id,owner_type,slug,title,short_description,description,category,language_code,level,price_minor,currency,certificate_enabled,created_by) VALUES(?,?,'organization',?,?,?,?,?,?,?,?,?,?,?)")
-      .bind(courseId, orgId, slug, title, String(body.shortDescription || "").slice(0, 280), String(body.description || "").slice(0, 12000), String(body.category || "General").slice(0, 80), String(body.languageCode || "en").slice(0, 8), String(body.level || "all_levels").slice(0, 30), Math.max(0, Math.floor(Number(body.priceMinor || 0))), String(body.currency || "USD").toUpperCase().slice(0, 3), body.certificateEnabled ? 1 : 0, actor.id).run();
+    try {
+      await env.DB.prepare("INSERT INTO courses(id,organization_id,owner_type,slug,title,short_description,description,category,language_code,level,price_minor,currency,certificate_enabled,created_by) VALUES(?,?,'organization',?,?,?,?,?,?,?,?,?,?,?)")
+        .bind(courseId, orgId, slug, title, String(body.shortDescription || "").slice(0, 280), String(body.description || "").slice(0, 12000), String(body.category || "General").slice(0, 80), String(body.languageCode || "en").slice(0, 8), String(body.level || "all_levels").slice(0, 30), priceMinor, currency, body.certificateEnabled === true ? 1 : 0, actor.id).run();
+    } catch {
+      return fail(409, "COURSE_SLUG_CONFLICT", "That course address is already in use. Choose a different course address.");
+    }
     await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id) VALUES(?,?,?,?,?,?)").bind(id(), actor.id, orgId, "course.created", "course", courseId).run();
     return json({ ok: true, courseId, status: "draft" }, 201);
+  }
+
+  const assignStaffMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses\/([A-Za-z0-9-]+)\/staff$/);
+  if (method === "POST" && assignStaffMatch) {
+    const [, orgId, courseId] = assignStaffMatch;
+    if (!await requireMember(env, actor, orgId, ["owner","administrator"])) return fail(403, "STAFF_ADMIN_REQUIRED", "Only organization owners and administrators can assign course staff.");
+    let body: any;
+    try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check the staff assignment."); }
+    const userId = String(body.userId || "");
+    const role = String(body.role || "");
+    if (!userId || !["instructor","reviewer"].includes(role)) return fail(422, "INVALID_STAFF_ASSIGNMENT", "Choose an existing organization member and an instructor or reviewer role.");
+    const course = await env.DB.prepare("SELECT id FROM courses WHERE id=? AND organization_id=? AND owner_type='organization'").bind(courseId, orgId).first();
+    if (!course) return fail(404, "COURSE_NOT_FOUND", "This course does not belong to the organization.");
+    const member = await env.DB.prepare("SELECT m.user_id,m.role FROM organization_members m JOIN users u ON u.id=m.user_id WHERE m.organization_id=? AND m.user_id=? AND m.status='active' AND u.status='active'").bind(orgId, userId).first<{user_id:string;role:string}>();
+    if (!member || member.role !== role) return fail(404, "ACTIVE_MEMBER_REQUIRED", "The person must already be an active organization member with the matching instructor or reviewer role.");
+    await env.DB.prepare("INSERT INTO course_staff(course_id,user_id,role,assigned_by) VALUES(?,?,?,?) ON CONFLICT(course_id,user_id) DO UPDATE SET role=excluded.role,assigned_by=excluded.assigned_by")
+      .bind(courseId, userId, role, actor.id).run();
+    await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id,detail_json) VALUES(?,?,?,?,?,?,?)")
+      .bind(id(), actor.id, orgId, "course.staff.assigned", "course_staff", courseId, JSON.stringify({userId,role})).run();
+    return json({ ok: true, courseId, userId, role });
+  }
+
+  const orgEnrollmentsMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses\/([A-Za-z0-9-]+)\/enrollments$/);
+  if (method === "GET" && orgEnrollmentsMatch) {
+    const [, orgId, courseId] = orgEnrollmentsMatch;
+    if (!await requireCourseAccess(env, actor, orgId, courseId, ["owner","administrator","publisher"], ["instructor","reviewer"])) return fail(403, "ORGANIZATION_ACCESS_REQUIRED", "You do not have access to this course's learners.");
+    const course = await env.DB.prepare("SELECT id FROM courses WHERE id=? AND organization_id=?").bind(courseId, orgId).first();
+    if (!course) return fail(404, "COURSE_NOT_FOUND", "This course does not belong to the organization.");
+    const rows = await env.DB.prepare("SELECT e.id AS enrollment_id,e.status,e.enrolled_at,u.id AS learner_id,u.display_name,u.email,COUNT(DISTINCT l.id) AS lesson_count,COUNT(DISTINCT CASE WHEN p.status='completed' THEN p.lesson_id END) AS completed_lessons FROM enrollments e JOIN users u ON u.id=e.learner_id LEFT JOIN course_modules m ON m.course_id=e.course_id LEFT JOIN course_lessons l ON l.module_id=m.id LEFT JOIN lesson_progress p ON p.enrollment_id=e.id AND p.lesson_id=l.id WHERE e.course_id=? AND e.organization_id=? GROUP BY e.id ORDER BY e.enrolled_at DESC LIMIT 250")
+      .bind(courseId, orgId).all();
+    return json({ ok: true, enrollments: rows.results || [] });
+  }
+
+  if (method === "POST" && orgEnrollmentsMatch) {
+    const [, orgId, courseId] = orgEnrollmentsMatch;
+    if (!await requireMember(env, actor, orgId, ["owner","administrator","publisher"])) return fail(403, "ENROLLMENT_ADMIN_REQUIRED", "Only organization owners, administrators and publishers can enroll learners.");
+    let body: any;
+    try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check the learner details."); }
+    const email = String(body.email || "").trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail(422, "INVALID_LEARNER_EMAIL", "Enter the learner's verified Proctify account email.");
+    const course = await env.DB.prepare("SELECT c.id,c.price_minor FROM courses c JOIN organizations o ON o.id=c.organization_id WHERE c.id=? AND c.organization_id=? AND c.owner_type='organization' AND c.status='published' AND o.status='verified'")
+      .bind(courseId, orgId).first<{id:string;price_minor:number}>();
+    if (!course) return fail(404, "COURSE_NOT_AVAILABLE", "This published course is not available for organization enrollment.");
+    if (course.price_minor > 0) return fail(402, "CHECKOUT_REQUIRED", "Paid course seats must be purchased through Proctify checkout before assignment.");
+    const learner = await env.DB.prepare("SELECT u.id FROM users u JOIN organization_members m ON m.user_id=u.id WHERE u.email=? COLLATE NOCASE AND u.status='active' AND m.organization_id=? AND m.role='learner' AND m.status='active'")
+      .bind(email, orgId).first<{id:string}>();
+    if (!learner) return fail(404, "ACTIVE_LEARNER_REQUIRED", "Add the person as an active learner in this organization before enrolling them.");
+    const enrollmentId = id();
+    await env.DB.prepare("INSERT OR IGNORE INTO enrollments(id,course_id,learner_id,organization_id,source,status) VALUES(?,?,?,?,'organization_assignment','active')")
+      .bind(enrollmentId, courseId, learner.id, orgId).run();
+    const enrollment = await env.DB.prepare("SELECT id,status,enrolled_at FROM enrollments WHERE course_id=? AND learner_id=?").bind(courseId, learner.id).first();
+    await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id,detail_json) VALUES(?,?,?,?,?,?,?)")
+      .bind(id(), actor.id, orgId, "course.learner.enrolled", "enrollment", enrollmentId, JSON.stringify({courseId,learnerId:learner.id})).run();
+    return json({ ok: true, enrollment }, 201);
   }
 
   const publishMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses\/([A-Za-z0-9-]+)\/publish$/);
@@ -200,19 +331,44 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, courseId, status: "published" });
   }
 
+  if (method === "GET" && path === "/api/learners/me/enrollments") {
+    const rows = await env.DB.prepare("SELECT e.id AS enrollment_id,e.status,e.enrolled_at,e.completed_at,c.id AS course_id,c.slug,c.title,c.short_description,c.category,c.level,COUNT(DISTINCT l.id) AS lesson_count,COUNT(DISTINCT CASE WHEN p.status='completed' THEN p.lesson_id END) AS completed_lessons FROM enrollments e JOIN courses c ON c.id=e.course_id LEFT JOIN course_modules m ON m.course_id=c.id LEFT JOIN course_lessons l ON l.module_id=m.id LEFT JOIN lesson_progress p ON p.enrollment_id=e.id AND p.lesson_id=l.id WHERE e.learner_id=? AND e.status IN ('active','completed') GROUP BY e.id ORDER BY e.enrolled_at DESC LIMIT 100")
+      .bind(actor.id).all();
+    return json({ ok: true, enrollments: rows.results || [] });
+  }
+
+  const orgCoursesMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses$/);
+  if (method === "GET" && orgCoursesMatch) {
+    const orgId = orgCoursesMatch[1];
+    if (!await requireMember(env, actor, orgId, ["owner","administrator","publisher","instructor","reviewer"])) return fail(403, "ORGANIZATION_ACCESS_REQUIRED", "You do not have access to this organization's courses.");
+    const rows = await env.DB.prepare("SELECT c.id,c.slug,c.title,c.status,c.price_minor,c.currency,c.published_at,c.updated_at,COUNT(DISTINCT e.id) AS learner_count FROM courses c LEFT JOIN enrollments e ON e.course_id=c.id WHERE c.organization_id=? AND c.owner_type='organization' AND (EXISTS (SELECT 1 FROM organization_members m WHERE m.organization_id=c.organization_id AND m.user_id=? AND m.status='active' AND m.role IN ('owner','administrator','publisher')) OR EXISTS (SELECT 1 FROM course_staff s WHERE s.course_id=c.id AND s.user_id=?)) GROUP BY c.id ORDER BY c.updated_at DESC LIMIT 100")
+      .bind(orgId, actor.id, actor.id).all();
+    return json({ ok: true, courses: rows.results || [] });
+  }
+
+  const archiveMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses\/([A-Za-z0-9-]+)\/archive$/);
+  if (method === "POST" && archiveMatch) {
+    const [, orgId, courseId] = archiveMatch;
+    if (!await requireMember(env, actor, orgId, ["owner","administrator","publisher"])) return fail(403, "COURSE_ARCHIVE_PERMISSION_REQUIRED", "Only an authorized organization publisher can archive a course.");
+    const result = await env.DB.prepare("UPDATE courses SET status='archived',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organization_id=? AND owner_type='organization' AND status='published'").bind(courseId, orgId).run();
+    if (!result.meta.changes) return fail(404, "PUBLISHED_COURSE_NOT_FOUND", "Only a published course in this organization can be archived.");
+    await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id) VALUES(?,?,?,?,?,?)").bind(id(), actor.id, orgId, "course.archived", "course", courseId).run();
+    return json({ ok: true, courseId, status: "archived", existingEnrollmentsPreserved: true });
+  }
+
   const curriculumMatch = path.match(/^\/api\/courses\/([A-Za-z0-9-]+)\/curriculum$/);
   if (method === "GET" && curriculumMatch) {
     const courseId = curriculumMatch[1];
-    const enrollment = await env.DB.prepare("SELECT id FROM enrollments WHERE course_id=? AND learner_id=? AND status IN ('active','completed')").bind(courseId, actor.id).first();
-    const rows = await env.DB.prepare("SELECT m.id AS module_id,m.title AS module_title,m.position AS module_position,l.id AS lesson_id,l.title AS lesson_title,l.lesson_type,l.content_json,l.position AS lesson_position,l.is_preview FROM course_modules m JOIN course_lessons l ON l.module_id=m.id JOIN courses c ON c.id=m.course_id WHERE c.id=? AND c.status='published' AND (?=1 OR l.is_preview=1) ORDER BY m.position,l.position")
-      .bind(courseId, enrollment ? 1 : 0).all();
+    const enrollment = await env.DB.prepare("SELECT e.id FROM enrollments e JOIN courses c ON c.id=e.course_id LEFT JOIN organizations o ON o.id=c.organization_id WHERE e.course_id=? AND e.learner_id=? AND e.status IN ('active','completed') AND c.status IN ('published','archived') AND (c.owner_type='proctify' OR o.status='verified')").bind(courseId, actor.id).first();
+    const rows = await env.DB.prepare("SELECT m.id AS module_id,m.title AS module_title,m.position AS module_position,l.id AS lesson_id,l.title AS lesson_title,l.lesson_type,l.content_json,l.position AS lesson_position,l.is_preview FROM course_modules m JOIN course_lessons l ON l.module_id=m.id JOIN courses c ON c.id=m.course_id LEFT JOIN organizations o ON o.id=c.organization_id WHERE c.id=? AND c.status IN ('published','archived') AND (c.owner_type='proctify' OR o.status='verified') AND (c.status='published' OR (c.status='archived' AND ?=1)) AND (?=1 OR l.is_preview=1) ORDER BY m.position,l.position")
+      .bind(courseId, enrollment ? 1 : 0, enrollment ? 1 : 0).all();
     return json({ ok: true, enrolled: Boolean(enrollment), curriculum: rows.results || [] });
   }
 
   const assignmentCreate = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses\/([A-Za-z0-9-]+)\/assignments$/);
   if (method === "POST" && assignmentCreate) {
     const [, orgId, courseId] = assignmentCreate;
-    if (!await requireMember(env, actor, orgId, ["owner","administrator","publisher","instructor"])) return fail(403, "COURSE_EDIT_PERMISSION_REQUIRED", "You do not have permission to add assignments.");
+    if (!await requireCourseAccess(env, actor, orgId, courseId, ["owner","administrator","publisher"], ["instructor"])) return fail(403, "COURSE_EDIT_PERMISSION_REQUIRED", "You do not have permission to add assignments to this course.");
     const course = await env.DB.prepare("SELECT id FROM courses WHERE id=? AND organization_id=? AND owner_type='organization' AND status='draft'").bind(courseId, orgId).first();
     if (!course) return fail(404, "DRAFT_COURSE_NOT_FOUND", "Assignments can only be added to a draft course in this organization.");
     let body: any;
@@ -221,9 +377,11 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!title) return fail(422, "ASSIGNMENT_TITLE_REQUIRED", "An assignment title is required.");
     const dueAt = body.dueAt ? new Date(String(body.dueAt)) : null;
     if (dueAt && Number.isNaN(dueAt.getTime())) return fail(422, "INVALID_DUE_DATE", "Enter a valid assignment deadline.");
+    const maxScore = body.maxScore == null ? null : Number(body.maxScore);
+    if (maxScore !== null && (!Number.isFinite(maxScore) || maxScore <= 0 || maxScore > 1_000_000)) return fail(422, "INVALID_MAX_SCORE", "Enter a positive maximum score.");
     const assignmentId = id();
     await env.DB.prepare("INSERT INTO assignments(id,course_id,title,instructions,due_at,max_score) VALUES(?,?,?,?,?,?)")
-      .bind(assignmentId, courseId, title, String(body.instructions || "").slice(0, 5000), dueAt ? dueAt.toISOString() : null, body.maxScore == null ? null : Math.max(0, Number(body.maxScore))).run();
+      .bind(assignmentId, courseId, title, String(body.instructions || "").slice(0, 5000), dueAt ? dueAt.toISOString() : null, maxScore).run();
     await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id) VALUES(?,?,?,?,?,?)").bind(id(), actor.id, orgId, "course.assignment.created", "assignment", assignmentId).run();
     return json({ ok: true, assignmentId }, 201);
   }
@@ -231,7 +389,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const moduleMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses\/([A-Za-z0-9-]+)\/modules$/);
   if (method === "POST" && moduleMatch) {
     const [, orgId, courseId] = moduleMatch;
-    if (!await requireMember(env, actor, orgId, ["owner","administrator","publisher","instructor"])) return fail(403, "COURSE_EDIT_PERMISSION_REQUIRED", "You do not have permission to edit this course.");
+    if (!await requireCourseAccess(env, actor, orgId, courseId, ["owner","administrator","publisher"], ["instructor"])) return fail(403, "COURSE_EDIT_PERMISSION_REQUIRED", "You do not have permission to edit this course.");
     const course = await env.DB.prepare("SELECT id FROM courses WHERE id=? AND organization_id=? AND owner_type='organization' AND status='draft'").bind(courseId, orgId).first();
     if (!course) return fail(404, "DRAFT_COURSE_NOT_FOUND", "Only a draft course in this organization can be edited.");
     let body: any;
@@ -239,7 +397,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const title = String(body.title || "").trim().slice(0, 180);
     if (!title) return fail(422, "MODULE_TITLE_REQUIRED", "A module title is required.");
     const moduleId = id();
-    await env.DB.prepare("INSERT INTO course_modules(id,course_id,title,position) VALUES(?,?,?,?)").bind(moduleId, courseId, title, Math.max(0, Math.floor(Number(body.position || 0)))).run();
+    await env.DB.prepare("INSERT INTO course_modules(id,course_id,title,position) VALUES(?,?,?,?)").bind(moduleId, courseId, title, positionValue(body.position)).run();
     await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id) VALUES(?,?,?,?,?,?)").bind(id(), actor.id, orgId, "course.module.created", "course_module", moduleId).run();
     return json({ ok: true, moduleId }, 201);
   }
@@ -247,27 +405,28 @@ async function route(request: Request, env: Env): Promise<Response> {
   const lessonMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/modules\/([A-Za-z0-9-]+)\/lessons$/);
   if (method === "POST" && lessonMatch) {
     const [, orgId, moduleId] = lessonMatch;
-    if (!await requireMember(env, actor, orgId, ["owner","administrator","publisher","instructor"])) return fail(403, "COURSE_EDIT_PERMISSION_REQUIRED", "You do not have permission to edit this course.");
-    const module = await env.DB.prepare("SELECT m.id FROM course_modules m JOIN courses c ON c.id=m.course_id WHERE m.id=? AND c.organization_id=? AND c.status='draft' AND c.owner_type='organization'").bind(moduleId, orgId).first();
+    const module = await env.DB.prepare("SELECT m.id,m.course_id FROM course_modules m JOIN courses c ON c.id=m.course_id WHERE m.id=? AND c.organization_id=? AND c.status='draft' AND c.owner_type='organization'").bind(moduleId, orgId).first<{id:string;course_id:string}>();
     if (!module) return fail(404, "DRAFT_MODULE_NOT_FOUND", "This module is not part of an editable draft course.");
+    if (!await requireCourseAccess(env, actor, orgId, module.course_id, ["owner","administrator","publisher"], ["instructor"])) return fail(403, "COURSE_EDIT_PERMISSION_REQUIRED", "You do not have permission to edit this course.");
     let body: any;
     try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check the lesson details."); }
     const title = String(body.title || "").trim().slice(0, 180);
     const lessonType = String(body.lessonType || "text");
     const allowedTypes = ["video","text","document","link","presentation","quiz","assignment"];
     if (!title || !allowedTypes.includes(lessonType)) return fail(422, "LESSON_DETAILS_REQUIRED", "Enter a lesson title and choose a supported lesson type.");
+    if (body.content != null && (typeof body.content !== "object" || Array.isArray(body.content))) return fail(422, "INVALID_LESSON_CONTENT", "Lesson content must be structured lesson information.");
     const contentJson = JSON.stringify(body.content || {});
     if (contentJson.length > 20_000) return fail(413, "LESSON_CONTENT_TOO_LARGE", "Keep lesson details under 20 KB. Store large files in private course storage.");
     const lessonId = id();
     await env.DB.prepare("INSERT INTO course_lessons(id,module_id,title,lesson_type,content_json,position,is_preview) VALUES(?,?,?,?,?,?,?)")
-      .bind(lessonId, moduleId, title, lessonType, contentJson, Math.max(0, Math.floor(Number(body.position || 0))), body.isPreview ? 1 : 0).run();
+      .bind(lessonId, moduleId, title, lessonType, contentJson, positionValue(body.position), body.isPreview === true ? 1 : 0).run();
     await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id) VALUES(?,?,?,?,?,?)").bind(id(), actor.id, orgId, "course.lesson.created", "course_lesson", lessonId).run();
     return json({ ok: true, lessonId }, 201);
   }
 
   const enrollMatch = path.match(/^\/api\/courses\/([A-Za-z0-9-]+)\/enroll$/);
   if (method === "POST" && enrollMatch) {
-    const course = await env.DB.prepare("SELECT id,organization_id,price_minor,status FROM courses WHERE id=? AND status='published'").bind(enrollMatch[1]).first<{id:string;organization_id:string|null;price_minor:number;status:string}>();
+    const course = await env.DB.prepare("SELECT c.id,c.organization_id,c.price_minor,c.status FROM courses c LEFT JOIN organizations o ON o.id=c.organization_id WHERE c.id=? AND c.status='published' AND (c.owner_type='proctify' OR o.status='verified')").bind(enrollMatch[1]).first<{id:string;organization_id:string|null;price_minor:number;status:string}>();
     if (!course) return fail(404, "COURSE_NOT_AVAILABLE", "This course is not available for enrollment.");
     if (course.price_minor > 0) return fail(402, "CHECKOUT_REQUIRED", "This course requires checkout. Paid enrollment will be enabled when the payment provider is connected.");
     const enrollmentId = id();
@@ -281,7 +440,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     let body: any;
     try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check the progress update."); }
     const lessonId = String(body.lessonId || "");
-    const enrollment = await env.DB.prepare("SELECT e.id,e.course_id FROM enrollments e WHERE e.id=? AND e.learner_id=? AND e.status='active'").bind(progressMatch[1], actor.id).first<{id:string;course_id:string}>();
+    const enrollment = await env.DB.prepare("SELECT e.id,e.course_id FROM enrollments e JOIN courses c ON c.id=e.course_id LEFT JOIN organizations o ON o.id=c.organization_id WHERE e.id=? AND e.learner_id=? AND e.status='active' AND c.status IN ('published','archived') AND (c.owner_type='proctify' OR o.status='verified')").bind(progressMatch[1], actor.id).first<{id:string;course_id:string}>();
     if (!enrollment) return fail(404, "ENROLLMENT_NOT_FOUND", "This active enrollment was not found for your account.");
     const lesson = await env.DB.prepare("SELECT l.id FROM course_lessons l JOIN course_modules m ON m.id=l.module_id WHERE l.id=? AND m.course_id=?").bind(lessonId, enrollment.course_id).first();
     if (!lesson) return fail(404, "LESSON_NOT_IN_COURSE", "This lesson is not part of the enrolled course.");
@@ -292,11 +451,40 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, lessonId, status, lastPositionSeconds: seconds });
   }
 
+  const courseAssignmentsMatch = path.match(/^\/api\/courses\/([A-Za-z0-9-]+)\/assignments$/);
+  if (method === "GET" && courseAssignmentsMatch) {
+    const courseId = courseAssignmentsMatch[1];
+    const enrollment = await env.DB.prepare("SELECT e.id FROM enrollments e JOIN courses c ON c.id=e.course_id LEFT JOIN organizations o ON o.id=c.organization_id WHERE e.course_id=? AND e.learner_id=? AND e.status IN ('active','completed') AND c.status IN ('published','archived') AND (c.owner_type='proctify' OR o.status='verified')").bind(courseId, actor.id).first();
+    if (!enrollment) return fail(403, "ENROLLMENT_REQUIRED", "Enroll in this available course to view its assignments.");
+    const rows = await env.DB.prepare("SELECT a.id,a.title,a.instructions,a.due_at,a.max_score,s.status AS submission_status,s.score,s.feedback,s.submitted_at FROM assignments a LEFT JOIN assignment_submissions s ON s.assignment_id=a.id AND s.learner_id=? WHERE a.course_id=? ORDER BY a.created_at ASC")
+      .bind(actor.id, courseId).all();
+    return json({ ok: true, assignments: rows.results || [] });
+  }
+
+  const reviewAssignment = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/assignments\/([A-Za-z0-9-]+)\/review$/);
+  if (method === "POST" && reviewAssignment) {
+    const [, orgId, assignmentId] = reviewAssignment;
+    const assignmentCourse = await env.DB.prepare("SELECT course_id FROM assignments WHERE id=?").bind(assignmentId).first<{course_id:string}>();
+    if (!assignmentCourse || !await requireCourseAccess(env, actor, orgId, assignmentCourse.course_id, ["owner","administrator"], ["instructor","reviewer"])) return fail(403, "REVIEW_PERMISSION_REQUIRED", "You do not have permission to review this course's assignments.");
+    let body: any;
+    try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check the review details."); }
+    const submissionId = String(body.submissionId || "");
+    const assignment = await env.DB.prepare("SELECT a.id,a.max_score FROM assignments a JOIN courses c ON c.id=a.course_id WHERE a.id=? AND c.organization_id=?").bind(assignmentId, orgId).first<{id:string;max_score:number|null}>();
+    if (!assignment) return fail(404, "ASSIGNMENT_NOT_FOUND", "This assignment is not part of your organization.");
+    const score = body.score == null ? null : Number(body.score);
+    if (score !== null && (!Number.isFinite(score) || score < 0 || (assignment.max_score !== null && score > assignment.max_score))) return fail(422, "INVALID_SCORE", "The score must be within the assignment's allowed range.");
+    const updated = await env.DB.prepare("UPDATE assignment_submissions SET status='reviewed',score=?,feedback=?,reviewed_by=?,reviewed_at=CURRENT_TIMESTAMP WHERE id=? AND assignment_id=? AND status IN ('submitted','returned')")
+      .bind(score, String(body.feedback || "").slice(0, 5000), actor.id, submissionId, assignmentId).run();
+    if (!updated.meta.changes) return fail(404, "SUBMISSION_NOT_REVIEWABLE", "The submission was not found or has already been reviewed.");
+    await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id) VALUES(?,?,?,?,?,?)").bind(id(), actor.id, orgId, "assignment.reviewed", "assignment_submission", submissionId).run();
+    return json({ ok: true, status: "reviewed" });
+  }
+
   const submissionMatch = path.match(/^\/api\/assignments\/([A-Za-z0-9-]+)\/submissions$/);
   if (method === "POST" && submissionMatch) {
     let body: any;
     try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check your assignment response."); }
-    const assignment = await env.DB.prepare("SELECT a.id,a.course_id,a.due_at FROM assignments a WHERE a.id=?").bind(submissionMatch[1]).first<{id:string;course_id:string;due_at:string|null}>();
+    const assignment = await env.DB.prepare("SELECT a.id,a.course_id,a.due_at FROM assignments a JOIN courses c ON c.id=a.course_id LEFT JOIN organizations o ON o.id=c.organization_id WHERE a.id=? AND c.status IN ('published','archived') AND (c.owner_type='proctify' OR o.status='verified')").bind(submissionMatch[1]).first<{id:string;course_id:string;due_at:string|null}>();
     if (!assignment) return fail(404, "ASSIGNMENT_NOT_FOUND", "This assignment is not available.");
     const enrollment = await env.DB.prepare("SELECT id FROM enrollments WHERE course_id=? AND learner_id=? AND status IN ('active','completed')").bind(assignment.course_id, actor.id).first();
     if (!enrollment) return fail(403, "ENROLLMENT_REQUIRED", "Enroll in this course before submitting the assignment.");
@@ -304,8 +492,9 @@ async function route(request: Request, env: Env): Promise<Response> {
     const responseJson = JSON.stringify(body.response ?? {});
     if (responseJson.length > 20_000) return fail(413, "SUBMISSION_TOO_LARGE", "Keep your response under 20 KB or use an approved course file upload.");
     const submissionId = id();
-    await env.DB.prepare("INSERT INTO assignment_submissions(id,assignment_id,learner_id,response_json,status) VALUES(?,?,?,?,'submitted') ON CONFLICT(assignment_id,learner_id) DO UPDATE SET response_json=excluded.response_json,status='submitted',submitted_at=CURRENT_TIMESTAMP,score=NULL,feedback=NULL,reviewed_by=NULL,reviewed_at=NULL")
+    const saved = await env.DB.prepare("INSERT INTO assignment_submissions(id,assignment_id,learner_id,response_json,status) VALUES(?,?,?,?,'submitted') ON CONFLICT(assignment_id,learner_id) DO UPDATE SET response_json=excluded.response_json,status='submitted',submitted_at=CURRENT_TIMESTAMP,score=NULL,feedback=NULL,reviewed_by=NULL,reviewed_at=NULL WHERE assignment_submissions.status IN ('submitted','returned')")
       .bind(submissionId, assignment.id, actor.id, responseJson).run();
+    if (!saved.meta.changes) return fail(409, "SUBMISSION_ALREADY_REVIEWED", "This submission has already been reviewed. Contact the instructor if you need another attempt.");
     return json({ ok: true, assignmentId: assignment.id, status: "submitted" }, 201);
   }
 
