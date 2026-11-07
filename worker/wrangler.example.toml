@@ -23,7 +23,8 @@ bucket_name = "proctorava-course-assets"
 # Never commit actual values:
 # AUTH_JWT_SECRET
 # AUTH_OTP_SECRET
-# AWS_ACCESS_KEY_ID
-# AWS_SECRET_ACCESS_KEY
-# AWS_SESSION_TOKEN (only for temporary AWS credentials)
+# AWS_ACCESS_KEY_ID (Cloudflare secret store; SES HTTPS API credential)
+# AWS_SECRET_ACCESS_KEY (Cloudflare secret store; SES HTTPS API credential)
+# AWS_SESSION_TOKEN (optional; only for temporary AWS credentials)
+# Note: this Worker uses SES v2 HTTPS API, not SMTP username/password.
 # TURNSTILE_SECRET (organization application verification)
