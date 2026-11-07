@@ -41,6 +41,8 @@
 - Use separate staging and production databases and buckets.
 - Apply least-privilege access to D1, R2, SES and payment services.
 - Rate-limit registration, login, certificate lookup and sensitive actions.
+- Validate Turnstile success against the requesting site's hostname; do not accept a successful challenge issued for a different website.
+- Limit instructor/reviewer access to the courses explicitly assigned to them, including learner lists and submission reviews.
 - Log security events without storing passwords, OTPs, bearer tokens or full identity documents.
 - Back up D1 and periodically test restoration.
 - Monitor unusual login attempts, cross-organization access denials and payout changes.
