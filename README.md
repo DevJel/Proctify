@@ -39,4 +39,4 @@ The LMS validation workflow checks Worker TypeScript installation/type checking,
 
 ## Integration boundary
 
-External services and connectors must remain behind clearly defined service boundaries. Keep connector credentials in protected secret storage, never in frontend code or committed configuration. Connector-specific setup and any integration mixing or exceptions must be documented here in the README footer, not embedded as unrelated logic in application files.
+External services and connectors must remain behind clearly defined service boundaries. Keep connector credentials in protected secret storage, never in frontend code or committed configuration. The MCP-ISO connector is not currently available in the connected tool set for this repository; no claim of a live MCP-ISO connection is made. Keep its future adapter and credentials separate from application code. Connector-specific setup and any integration mixing or exceptions must be documented here in the README footer, not embedded as unrelated logic in application files.
