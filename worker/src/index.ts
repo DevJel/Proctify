@@ -7,7 +7,7 @@ export interface Env {
   TURNSTILE_SECRET?: string;
 }
 
-type Claims = { sub: string; email: string; name?: string; iss: string; aud: string | string[]; exp: number };
+type Claims = { sub: string; email: string; email_verified: boolean; name?: string; iss: string; aud: string | string[]; exp: number };
 type Actor = { id: string; email: string; name: string };
 
 const json = (data: unknown, status = 200, headers: HeadersInit = {}) =>
@@ -46,16 +46,20 @@ async function authenticate(request: Request, env: Env): Promise<Actor | null> {
   try {
     const header = decodePart(parts[0]);
     const claims = decodePart(parts[1]) as Claims;
-    if (header.alg !== "HS256" || !claims.sub || !claims.email || claims.exp <= Date.now() / 1000) return null;
-    if (claims.iss !== env.AUTH_ISSUER) return null;
+    if (header.alg !== "HS256" || !claims.sub || !claims.email || claims.email_verified !== true || !Number.isFinite(claims.exp) || claims.exp <= Date.now() / 1000) return null;
+    if (!env.AUTH_ISSUER || !env.AUTH_AUDIENCE || claims.iss !== env.AUTH_ISSUER) return null;
     const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
     if (!audiences.includes(env.AUTH_AUDIENCE)) return null;
+    const email = claims.email.trim().toLowerCase();
+    if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return null;
     const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.AUTH_JWT_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
     const signed = new TextEncoder().encode(parts[0] + "." + parts[1]);
     const signature = Uint8Array.from(atob(parts[2].replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - parts[2].length % 4) % 4)), c => c.charCodeAt(0));
     if (!await crypto.subtle.verify("HMAC", key, signature, signed)) return null;
-    await env.DB.prepare("INSERT INTO users(id,email,display_name) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET email=excluded.email, display_name=excluded.display_name, updated_at=CURRENT_TIMESTAMP").bind(claims.sub, claims.email.toLowerCase(), claims.name || "").run();
-    return { id: claims.sub, email: claims.email.toLowerCase(), name: claims.name || "" };
+    await env.DB.prepare("INSERT OR IGNORE INTO users(id,email,display_name) VALUES(?,?,?)").bind(claims.sub, email, String(claims.name || "").slice(0, 160)).run();
+    const user = await env.DB.prepare("SELECT email,status,display_name FROM users WHERE id=?").bind(claims.sub).first<{email:string;status:string;display_name:string}>();
+    if (!user || user.status !== "active" || user.email.toLowerCase() !== email) return null;
+    return { id: claims.sub, email, name: user.display_name || "" };
   } catch { return null; }
 }
 
@@ -208,9 +212,16 @@ async function route(request: Request, env: Env): Promise<Response> {
     const title = String(body.title || "").trim().slice(0, 180);
     const slug = slugify(String(body.slug || title));
     if (!title || !slug) return fail(422, "COURSE_DETAILS_REQUIRED", "A course title is required.");
+    const priceMinor = body.priceMinor == null ? 0 : Number(body.priceMinor);
+    const currency = String(body.currency || "USD").toUpperCase();
+    if (!Number.isSafeInteger(priceMinor) || priceMinor < 0 || !/^[A-Z]{3}$/.test(currency)) return fail(422, "INVALID_PRICE", "Enter a valid whole-number price in minor currency units and a three-letter currency code.");
     const courseId = id();
-    await env.DB.prepare("INSERT INTO courses(id,organization_id,owner_type,slug,title,short_description,description,category,language_code,level,price_minor,currency,certificate_enabled,created_by) VALUES(?,?,'organization',?,?,?,?,?,?,?,?,?,?,?)")
-      .bind(courseId, orgId, slug, title, String(body.shortDescription || "").slice(0, 280), String(body.description || "").slice(0, 12000), String(body.category || "General").slice(0, 80), String(body.languageCode || "en").slice(0, 8), String(body.level || "all_levels").slice(0, 30), Math.max(0, Math.floor(Number(body.priceMinor || 0))), String(body.currency || "USD").toUpperCase().slice(0, 3), body.certificateEnabled ? 1 : 0, actor.id).run();
+    try {
+      await env.DB.prepare("INSERT INTO courses(id,organization_id,owner_type,slug,title,short_description,description,category,language_code,level,price_minor,currency,certificate_enabled,created_by) VALUES(?,?,'organization',?,?,?,?,?,?,?,?,?,?,?)")
+        .bind(courseId, orgId, slug, title, String(body.shortDescription || "").slice(0, 280), String(body.description || "").slice(0, 12000), String(body.category || "General").slice(0, 80), String(body.languageCode || "en").slice(0, 8), String(body.level || "all_levels").slice(0, 30), priceMinor, currency, body.certificateEnabled === true ? 1 : 0, actor.id).run();
+    } catch {
+      return fail(409, "COURSE_SLUG_CONFLICT", "That course address is already in use. Choose a different course address.");
+    }
     await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id) VALUES(?,?,?,?,?,?)").bind(id(), actor.id, orgId, "course.created", "course", courseId).run();
     return json({ ok: true, courseId, status: "draft" }, 201);
   }
