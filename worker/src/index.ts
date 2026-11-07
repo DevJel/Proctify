@@ -215,7 +215,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, courseId, status: "draft" }, 201);
   }
 
-  const assignStaffMatch = path.match(/^\\/api\\/organizations\\/([A-Za-z0-9-]+)\\/courses\\/([A-Za-z0-9-]+)\\/staff$/);
+  const assignStaffMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses\/([A-Za-z0-9-]+)\/staff$/);
   if (method === "POST" && assignStaffMatch) {
     const [, orgId, courseId] = assignStaffMatch;
     if (!await requireMember(env, actor, orgId, ["owner","administrator"])) return fail(403, "STAFF_ADMIN_REQUIRED", "Only organization owners and administrators can assign course staff.");
