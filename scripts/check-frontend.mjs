@@ -14,6 +14,10 @@ assert.ok(html.includes('href="#/login/learner"'), "learner sign-in entry must e
 assert.ok(html.includes('href="#/login/organization"'), "organization and educator sign-in entry must exist");
 assert.ok(html.includes('href="#/login/admin"'), "Super Admin sign-in entry must exist");
 assert.match(html, /function LoginPage\(role="learner"\)/, "role-specific login page renderer must exist");
+assert.match(html, /authLoginForm/, "login pages must provide the email verification form");
+assert.match(html, /AUTH_API_BASE/, "login pages must call the configured authentication API");
+assert.match(html, /fetch\(AUTH_API_BASE\+"\/health"\)/, "login pages must check API readiness before enabling sign-in");
+assert.ok(html.includes("capabilities?.identity") && html.includes("capabilities?.email"), "login pages must require identity and email delivery readiness");
 assert.match(html, /auth\/challenge/, "login pages must request an OTP challenge");
 assert.match(html, /auth\/verify/, "login pages must verify the OTP");
 assert.match(html, /sessionStorage\.setItem\("proctorava:access_token"/, "bearer token must be stored in session storage");
