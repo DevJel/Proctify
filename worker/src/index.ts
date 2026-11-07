@@ -498,6 +498,154 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, assignmentId: assignment.id, status: "submitted" }, 201);
   }
 
+
+  // Educator groups and sections. All group data is scoped to a verified organization.
+  const groupBase = path.match(/^\\/api\\/organizations\\/([A-Za-z0-9-]+)\\/groups$/);
+  if (groupBase && method === "POST") {
+    const orgId = groupBase[1];
+    if (!await requireMember(env, actor, orgId, ["owner","administrator"])) return fail(403, "GROUP_ADMIN_REQUIRED", "Only organization owners and administrators can create groups.");
+    let body: any; try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check the group details."); }
+    const name = String(body.name || "").trim().slice(0, 120);
+    const sectionCode = String(body.sectionCode || "").trim().slice(0, 40) || null;
+    if (!name) return fail(422, "GROUP_NAME_REQUIRED", "Enter a group or section name.");
+    const groupId = id();
+    try {
+      await env.DB.prepare("INSERT INTO learning_groups(id,organization_id,name,section_code,subject,description,created_by) VALUES(?,?,?,?,?,?,?)")
+        .bind(groupId, orgId, name, sectionCode, String(body.subject || "").trim().slice(0,120), String(body.description || "").trim().slice(0,1000), actor.id).run();
+    } catch { return fail(409, "SECTION_CODE_EXISTS", "That section code is already used in this organization."); }
+    await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id) VALUES(?,?,?,?,?,?)")
+      .bind(id(),actor.id,orgId,"learning_group.created","learning_group",groupId).run();
+    return json({ok:true,groupId,name,sectionCode},201);
+  }
+  if (groupBase && method === "GET") {
+    const orgId = groupBase[1];
+    if (!await requireMember(env,actor,orgId,["owner","administrator","instructor"])) return fail(403,"GROUP_ACCESS_REQUIRED","You do not have access to this organization's groups.");
+    const rows = await env.DB.prepare("SELECT g.id,g.name,g.section_code,g.subject,g.description,g.status,g.created_at,COUNT(DISTINCT gl.learner_id) AS learner_count,COUNT(DISTINCT gc.course_id) AS assigned_course_count FROM learning_groups g LEFT JOIN learning_group_learners gl ON gl.group_id=g.id LEFT JOIN learning_group_courses gc ON gc.group_id=g.id WHERE g.organization_id=? AND (EXISTS(SELECT 1 FROM organization_members m WHERE m.organization_id=g.organization_id AND m.user_id=? AND m.role IN ('owner','administrator') AND m.status='active') OR EXISTS(SELECT 1 FROM learning_group_educators ge WHERE ge.group_id=g.id AND ge.user_id=?)) GROUP BY g.id ORDER BY g.created_at DESC LIMIT 200")
+      .bind(orgId,actor.id,actor.id).all();
+    return json({ok:true,groups:rows.results||[]});
+  }
+
+  const groupRoute = path.match(/^\\/api\\/organizations\\/([A-Za-z0-9-]+)\\/groups\\/([A-Za-z0-9-]+)(?:\\/(educators|learners|courses|activities|announcements|messages))?$/);
+  if (groupRoute) {
+    const [,orgId,groupId,section] = groupRoute;
+    const group = await env.DB.prepare("SELECT id,organization_id,name FROM learning_groups WHERE id=? AND organization_id=? AND status='active'").bind(groupId,orgId).first<{id:string;organization_id:string;name:string}>();
+    if (!group) return fail(404,"GROUP_NOT_FOUND","This group was not found in your organization.");
+    const admin = await requireMember(env,actor,orgId,["owner","administrator"]);
+    const educator = await env.DB.prepare("SELECT 1 AS allowed FROM learning_group_educators WHERE group_id=? AND user_id=?").bind(groupId,actor.id).first();
+    const educatorAllowed = Boolean(educator);
+    if (!admin && !educatorAllowed) return fail(403,"GROUP_ACCESS_REQUIRED","You are not assigned to this group.");
+
+    if (section === "educators" && method === "POST") {
+      if (!admin) return fail(403,"GROUP_ADMIN_REQUIRED","Only organization administrators can assign educators.");
+      let body:any; try { body=await readJson(request); } catch { return fail(400,"INVALID_JSON","Please check the educator details."); }
+      const userId=String(body.userId||"");
+      const member=await env.DB.prepare("SELECT user_id FROM organization_members WHERE organization_id=? AND user_id=? AND role='instructor' AND status='active'").bind(orgId,userId).first();
+      if (!member) return fail(404,"ACTIVE_EDUCATOR_REQUIRED","Choose an active instructor in this organization.");
+      await env.DB.prepare("INSERT OR IGNORE INTO learning_group_educators(group_id,user_id,assigned_by) VALUES(?,?,?)").bind(groupId,userId,actor.id).run();
+      return json({ok:true,groupId,userId},201);
+    }
+    if (section === "educators" && method === "GET") {
+      const rows=await env.DB.prepare("SELECT u.id,u.display_name,u.email FROM learning_group_educators ge JOIN users u ON u.id=ge.user_id WHERE ge.group_id=? ORDER BY u.display_name").bind(groupId).all();
+      return json({ok:true,educators:rows.results||[]});
+    }
+    if (section === "learners" && method === "POST") {
+      if (!admin) return fail(403,"GROUP_ADMIN_REQUIRED","Only organization administrators can add learners to a group.");
+      let body:any; try { body=await readJson(request); } catch { return fail(400,"INVALID_JSON","Please check the learner details."); }
+      const email=String(body.email||"").trim().toLowerCase();
+      if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return fail(422,"INVALID_LEARNER_EMAIL","Enter the learner's verified account email.");
+      const learner=await env.DB.prepare("SELECT u.id FROM users u JOIN organization_members m ON m.user_id=u.id WHERE u.email=? COLLATE NOCASE AND u.status='active' AND m.organization_id=? AND m.role='learner' AND m.status='active'").bind(email,orgId).first<{id:string}>();
+      if (!learner) return fail(404,"ACTIVE_LEARNER_REQUIRED","The learner must have an active account in this organization first.");
+      await env.DB.prepare("INSERT OR IGNORE INTO learning_group_learners(group_id,organization_id,learner_id,added_by) VALUES(?,?,?,?)").bind(groupId,orgId,learner.id,actor.id).run();
+      return json({ok:true,groupId,learnerId:learner.id},201);
+    }
+    if (section === "learners" && method === "GET") {
+      const rows=await env.DB.prepare("SELECT u.id AS learner_id,u.display_name,u.email,gl.created_at AS added_at FROM learning_group_learners gl JOIN users u ON u.id=gl.learner_id WHERE gl.group_id=? ORDER BY u.display_name").bind(groupId).all();
+      return json({ok:true,learners:rows.results||[]});
+    }
+    if (section === "courses" && method === "POST") {
+      if (!admin) return fail(403,"GROUP_ADMIN_REQUIRED","Only organization administrators can assign courses to a group.");
+      let body:any; try { body=await readJson(request); } catch { return fail(400,"INVALID_JSON","Please check the course assignment."); }
+      const courseId=String(body.courseId||"");
+      const course=await env.DB.prepare("SELECT c.id,c.price_minor,c.status FROM courses c LEFT JOIN organizations o ON o.id=c.organization_id WHERE c.id=? AND c.status='published' AND (c.owner_type='proctify' OR (c.organization_id=? AND o.status='verified'))").bind(courseId,orgId).first<{id:string;price_minor:number;status:string}>();
+      if (!course) return fail(404,"COURSE_NOT_AVAILABLE","Choose a published Proctify course or a course owned by this organization.");
+      if (course.price_minor>0) return fail(402,"CHECKOUT_REQUIRED","Paid course seats must be purchased through platform checkout before assignment.");
+      const dueAt=body.dueAt?new Date(String(body.dueAt)):null;
+      if(dueAt&&Number.isNaN(dueAt.getTime())) return fail(422,"INVALID_DUE_DATE","Enter a valid due date.");
+      await env.DB.prepare("INSERT OR IGNORE INTO learning_group_courses(group_id,course_id,assigned_by,due_at) VALUES(?,?,?,?)").bind(groupId,courseId,actor.id,dueAt?dueAt.toISOString():null).run();
+      const learners=await env.DB.prepare("SELECT learner_id FROM learning_group_learners WHERE group_id=?").bind(groupId).all<{learner_id:string}>();
+      for(const learner of learners.results||[]) await env.DB.prepare("INSERT OR IGNORE INTO enrollments(id,course_id,learner_id,organization_id,source,status) VALUES(?,?,?,?, 'organization_assignment','active')").bind(id(),courseId,learner.learner_id,orgId).run();
+      return json({ok:true,groupId,courseId,enrolledLearners:(learners.results||[]).length},201);
+    }
+    if (section === "courses" && method === "GET") {
+      const rows=await env.DB.prepare("SELECT c.id,c.title,c.slug,c.category,c.status,gc.assigned_at,gc.due_at FROM learning_group_courses gc JOIN courses c ON c.id=gc.course_id WHERE gc.group_id=? ORDER BY gc.assigned_at DESC").bind(groupId).all();
+      return json({ok:true,courses:rows.results||[]});
+    }
+    if (section === "activities" && method === "POST") {
+      let body:any; try { body=await readJson(request); } catch { return fail(400,"INVALID_JSON","Please check the activity details."); }
+      const title=String(body.title||"").trim().slice(0,180);
+      const courseId=String(body.courseId||"");
+      const lessonId=String(body.lessonId||"")||null;
+      const assignmentId=String(body.assignmentId||"")||null;
+      if(!title||(!lessonId&&!assignmentId)) return fail(422,"ACTIVITY_DETAILS_REQUIRED","Enter an activity title and choose a lesson or assignment.");
+      const assigned=await env.DB.prepare("SELECT 1 AS ok FROM learning_group_courses WHERE group_id=? AND course_id=?").bind(groupId,courseId).first();
+      if(!assigned) return fail(403,"COURSE_NOT_ASSIGNED","Assign this course to the group before adding an activity.");
+      if(lessonId){const valid=await env.DB.prepare("SELECT 1 AS ok FROM course_lessons l JOIN course_modules m ON m.id=l.module_id WHERE l.id=? AND m.course_id=?").bind(lessonId,courseId).first();if(!valid)return fail(422,"LESSON_NOT_IN_COURSE","Choose a lesson from the assigned course.");}
+      if(assignmentId){const valid=await env.DB.prepare("SELECT 1 AS ok FROM assignments WHERE id=? AND course_id=?").bind(assignmentId,courseId).first();if(!valid)return fail(422,"ASSIGNMENT_NOT_IN_COURSE","Choose an assignment from the assigned course.");}
+      const dueAt=body.dueAt?new Date(String(body.dueAt)):null;if(dueAt&&Number.isNaN(dueAt.getTime()))return fail(422,"INVALID_DUE_DATE","Enter a valid due date.");
+      const activityId=id();
+      await env.DB.prepare("INSERT INTO learning_group_activities(id,group_id,course_id,lesson_id,assignment_id,title,instructions,due_at,created_by) VALUES(?,?,?,?,?,?,?,?,?)").bind(activityId,groupId,courseId,lessonId,assignmentId,title,String(body.instructions||"").slice(0,3000),dueAt?dueAt.toISOString():null,actor.id).run();
+      return json({ok:true,activityId},201);
+    }
+    if (section === "activities" && method === "GET") {
+      const rows=await env.DB.prepare("SELECT id,course_id,lesson_id,assignment_id,title,instructions,due_at,created_at FROM learning_group_activities WHERE group_id=? ORDER BY due_at").bind(groupId).all();
+      return json({ok:true,activities:rows.results||[]});
+    }
+    if (section === "announcements" && method === "POST") {
+      let body:any; try { body=await readJson(request); } catch { return fail(400,"INVALID_JSON","Please check the announcement."); }
+      const title=String(body.title||"").trim().slice(0,180), message=String(body.body||"").trim().slice(0,5000);
+      if(!title||!message)return fail(422,"ANNOUNCEMENT_REQUIRED","Enter an announcement title and message.");
+      const announcementId=id();
+      await env.DB.prepare("INSERT INTO learning_group_announcements(id,group_id,sender_id,title,body) VALUES(?,?,?,?,?)").bind(announcementId,groupId,actor.id,title,message).run();
+      return json({ok:true,announcementId},201);
+    }
+    if (section === "announcements" && method === "GET") {
+      const rows=await env.DB.prepare("SELECT a.id,a.title,a.body,a.created_at,u.display_name AS sender_name FROM learning_group_announcements a JOIN users u ON u.id=a.sender_id WHERE a.group_id=? ORDER BY a.created_at DESC LIMIT 100").bind(groupId).all();
+      return json({ok:true,announcements:rows.results||[]});
+    }
+    if (section === "messages" && method === "POST") {
+      let body:any; try { body=await readJson(request); } catch { return fail(400,"INVALID_JSON","Please check the message."); }
+      const recipientId=String(body.recipientId||"");
+      const recipient=await env.DB.prepare("SELECT 1 AS ok FROM learning_group_learners WHERE group_id=? AND learner_id=?").bind(groupId,recipientId).first();
+      if(!recipient)return fail(404,"LEARNER_NOT_IN_GROUP","Choose a learner who belongs to this group.");
+      const message=String(body.body||"").trim().slice(0,5000);
+      if(!message)return fail(422,"MESSAGE_REQUIRED","Enter a message before sending.");
+      const messageId=id();
+      await env.DB.prepare("INSERT INTO learner_messages(id,organization_id,group_id,sender_id,recipient_id,subject,body) VALUES(?,?,?,?,?,?,?)").bind(messageId,orgId,groupId,actor.id,recipientId,String(body.subject||"").slice(0,180),message).run();
+      return json({ok:true,messageId},201);
+    }
+    if (section === "messages" && method === "GET") {
+      const rows=await env.DB.prepare("SELECT id,sender_id,recipient_id,subject,body,read_at,created_at FROM learner_messages WHERE group_id=? AND (sender_id=? OR recipient_id=?) ORDER BY created_at DESC LIMIT 100").bind(groupId,actor.id,actor.id).all();
+      return json({ok:true,messages:rows.results||[]});
+    }
+  }
+  const learnerInbox = path.match(/^\\/api\\/learners\\/me\\/messages$/);
+  if (learnerInbox && method === "GET") {
+    const rows=await env.DB.prepare("SELECT id,organization_id,group_id,sender_id,subject,body,read_at,created_at FROM learner_messages WHERE recipient_id=? ORDER BY created_at DESC LIMIT 100").bind(actor.id).all();
+    return json({ok:true,messages:rows.results||[]});
+  }
+  const learnerMessage = path.match(/^\\/api\\/organizations\\/([A-Za-z0-9-]+)\\/learners\\/([A-Za-z0-9-]+)\\/messages$/);
+  if (learnerMessage && method === "POST") {
+    const [,orgId,recipientId]=learnerMessage;
+    if(!await requireMember(env,actor,orgId,["owner","administrator","instructor"]))return fail(403,"MESSAGE_PERMISSION_REQUIRED","Only organization administrators and educators can message learners.");
+    const membership=await env.DB.prepare("SELECT 1 AS ok FROM organization_members WHERE organization_id=? AND user_id=? AND role='learner' AND status='active'").bind(orgId,recipientId).first();
+    if(!membership)return fail(404,"LEARNER_NOT_FOUND","This learner is not an active member of your organization.");
+    let body:any;try{body=await readJson(request);}catch{return fail(400,"INVALID_JSON","Please check the message.");}
+    const message=String(body.body||"").trim().slice(0,5000);if(!message)return fail(422,"MESSAGE_REQUIRED","Enter a message before sending.");
+    const messageId=id();
+    await env.DB.prepare("INSERT INTO learner_messages(id,organization_id,sender_id,recipient_id,subject,body) VALUES(?,?,?,?,?,?)").bind(messageId,orgId,actor.id,recipientId,String(body.subject||"").slice(0,180),message).run();
+    return json({ok:true,messageId},201);
+  }
+
   return fail(404, "NOT_FOUND", "This Proctify service route does not exist.");
 }
 
