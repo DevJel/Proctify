@@ -128,7 +128,7 @@ export async function authenticate(request: Request, env: AuthEnv): Promise<Acto
     const claims = decodeJwtPart(parts[1]) as AuthClaims;
     if (header.alg !== "HS256" || header.typ !== "JWT" || !claims.sub || !claims.email || claims.email_verified !== true ||
       !Number.isFinite(claims.exp) || claims.exp <= Date.now() / 1000 ||
-      !Number.isFinite(claims.iat) || claims.iat > Date.now() / 1000 + 60) return null;
+      !Number.isFinite(claims.iat) || claims.iat > Date.now() / 1000 + 60 || claims.exp - claims.iat > (claims.login_audience === "admin" ? 4 : 12) * 60 * 60 + 60) return null;
     if (!env.AUTH_ISSUER || !env.AUTH_AUDIENCE || claims.iss !== env.AUTH_ISSUER) return null;
     const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
     if (!audiences.includes(env.AUTH_AUDIENCE)) return null;
