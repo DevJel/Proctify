@@ -214,7 +214,9 @@ async function handleVerify(request: Request, env: AuthEnv) {
   const challengeId = String(body.challengeId || "");
   if (!validEmail(email) || !/^\d{6}$/.test(code) || !/^[A-Za-z0-9-]{20,80}$/.test(challengeId))
     return authFail(422, "INVALID_CODE", "Enter the six-digit code sent to your email.");
-  if (!env.AUTH_OTP_SECRET || !env.AUTH_JWT_SECRET || !env.AUTH_ISSUER || !env.AUTH_AUDIENCE)
+  const issuer = env.AUTH_ISSUER;
+  const jwtAudience = env.AUTH_AUDIENCE;
+  if (!env.AUTH_OTP_SECRET || !env.AUTH_JWT_SECRET || !issuer || !jwtAudience)
     return authFail(503, "AUTH_NOT_CONFIGURED", "Secure sign-in is not configured yet.");
   const emailHash = await hmacHex(env.AUTH_OTP_SECRET, "email:" + email);
   const challenge = await env.DB.prepare("SELECT id,audience,organization_id,code_hash,attempts FROM auth_challenges WHERE id=? AND email_hash=? AND consumed_at IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now')")
@@ -233,7 +235,10 @@ async function handleVerify(request: Request, env: AuthEnv) {
   let organizations: Array<{ id: string; name: string; slug: string; role: string }> = [];
   if (audience === "learner") {
     if (!user) user = await createUserForEmail(env, email, "");
-    if (!user || user.status !== "active") return authFail(403, "ACCOUNT_UNAVAILABLE", "This account is not active. Contact the platform administrator.");
+    if (!user || user.status !== "active") {
+      await env.DB.prepare("UPDATE auth_challenges SET consumed_at=CURRENT_TIMESTAMP WHERE id=? AND consumed_at IS NULL").bind(challengeId).run();
+      return authFail(403, "ACCOUNT_UNAVAILABLE", "This account is not active. Contact the platform administrator.");
+    }
   } else if (audience === "organization") {
     const owned = await env.DB.prepare("SELECT id FROM organizations WHERE owner_email=? COLLATE NOCASE AND status='verified'")
       .bind(email).all<{ id: string }>();
@@ -277,7 +282,7 @@ async function handleVerify(request: Request, env: AuthEnv) {
   const expiresAt = new Date((now + lifetime) * 1000).toISOString();
   const token = await issueJwt(env, {
     sub: user.id, email, email_verified: true, name: user.display_name || "",
-    iss: env.AUTH_ISSUER, aud: env.AUTH_AUDIENCE, iat: now, exp: now + lifetime,
+    iss: issuer, aud: jwtAudience, iat: now, exp: now + lifetime,
     jti: sessionId, login_audience: audience
   });
   await env.DB.prepare("INSERT INTO auth_sessions(id,user_id,audience,expires_at) VALUES(?,?,?,?)")
