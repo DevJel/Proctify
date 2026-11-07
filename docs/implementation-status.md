@@ -11,7 +11,7 @@
 ## Hosting status checked during this review
 - The LMS validation workflow on the follow-up branch passes its Worker type check and both D1 migration checks.
 - The GitHub Pages deployment workflow for the merged `main` commit `0aa59e63ba5da63e080d756566793ed58507e0d1` reports failure. The available job-log connector did not return its deployment error, so the cause is not confirmed. Verify the GitHub Pages repository setting and deployment environment before treating the public site as updated.
-- The follow-up security and course-management improvements are in draft Pull Request #2 and are not yet part of `main`.
+- Educator groups and communication are in Pull Request #4; the Worker type check and all three database migration checks pass on its latest run. The pull request is not yet merged.
 
 ## Not verified as production services
 - No Worker source, D1 migration, R2 binding, identity provider configuration, SES integration, or payment webhook was present on the inspected `main` branch.
@@ -24,6 +24,8 @@
 - Strengthens authentication to require a signed verified-email claim and rejects suspended/deleted accounts without silently overwriting account email addresses.
 - Makes organization verification and its audit record a single database batch; masks learner surnames on public certificate verification.
 - Adds architecture and deployment guidance.
+- Adds organization-scoped educator groups/sections, instructor assignment, learner rosters, course/subject allocation, lesson/assignment activities and deadlines, group announcements, direct educator-to-learner messages, learner inbox, learner group list and learner replies. The new migration is `0003_educator_groups_and_communication.sql`.
+- Educator and learner screens are not yet connected to these APIs. These features are not yet available as clickable screens in the static application.
 - Does not claim that the Worker, database, email, identity issuer, payment provider, or production login portals are configured or live.
 
 ## Required before production
