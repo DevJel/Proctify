@@ -12,6 +12,7 @@
 1. Public marketplace: courses, publishers, schools, instructors, categories and reviews.
 2. Learner workspace: enrollments, course player, lesson progress, assignments, exams, assessment center, certificates and learning history.
 3. Organization workspace: profile, branding, instructors, learners, course builder, publishing, assignments, analytics and revenue.
+3a. Educator workspace: class and section groups, educator assignments, subject/course allocation, lesson and assignment activities, learner progress and direct communication.
 4. Super Admin workspace: organization verification, account moderation, first-party catalog, payments, payouts, settings and audit records.
 5. Proctify Assessment Center: existing twelve assessment categories, scoring, proctoring and certification workflows.
 
@@ -35,6 +36,12 @@ Branding never transfers ownership. Every organization-owned record must be scop
 - Super Admin: platform-wide access, protected separately and audited.
 
 Changing a URL or browser value must never grant a role. Authorization is checked by the API on every protected request. Public course detail URLs use globally unique slugs to avoid collisions between organizations.
+
+## Educator groups and learner communication
+
+Organization owners and administrators create groups/sections and assign active organization instructors. They add only active learners who belong to the same organization. Each educator sees only groups explicitly assigned to them. Groups can receive published Proctify courses or courses owned by that organization; paid seats must pass through platform checkout. Assigning a free course enrolls the current group roster, while newly added learners can be enrolled when the course is assigned again or through the organization enrollment flow.
+
+Educators can add activities linked to lessons or assignments in a course already assigned to the group, set due dates, publish group announcements and send individual learner messages. Learners can view their groups and announcements, receive messages and reply to an educator assigned to their group. All organization, group, learner and course relationships are checked by the API; browser-provided organization IDs do not grant access.
 
 ## Publishing lifecycle
 Draft → Published → Archived. A publisher must belong to a verified organization and have an active publisher-or-higher role. Archiving removes the course from new marketplace enrollment while preserving access and progress for existing learners. Public marketplace queries return only published courses from active, verified organizations, plus Proctify-owned first-party courses.
