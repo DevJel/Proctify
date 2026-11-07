@@ -1,8 +1,11 @@
 # Proctify Security and Privacy Rules
 
 ## Access rules
-- Every signed-in API request must have a valid, unexpired token from the configured identity issuer.
+- Every signed-in API request must have a valid, unexpired token from the configured identity issuer, with a signed `email_verified: true` claim.
+- Suspended or deleted accounts must be rejected even if an old token has not expired.
+- Existing account email addresses must not be silently overwritten by a new token claim.
 - Organization actions must check active membership and the required role in D1.
+- Instructor and reviewer permissions must be limited to courses explicitly assigned to them; organization-wide publisher and administrator roles are separately checked.
 - Organization data must be filtered by organization ID in the database query itself.
 - Super Admin actions must check the private platform administrator table.
 - Never grant permissions from URL parameters, local storage, hidden buttons or user-submitted role names.
@@ -21,6 +24,7 @@
 - Record the purpose, retention period and access policy for every sensitive recording.
 - Restrict recordings to specifically authorized reviewers; log every access.
 - Do not expose recordings or raw identity documents through public URLs.
+- Public certificate verification should reveal only the minimum learner identity needed for verification; the API masks the learner's surname.
 - Provide an appeal and human review path for proctoring flags.
 - Set retention periods by data type and jurisdiction; do not assume one retention period fits every customer.
 
@@ -37,6 +41,8 @@
 - Use separate staging and production databases and buckets.
 - Apply least-privilege access to D1, R2, SES and payment services.
 - Rate-limit registration, login, certificate lookup and sensitive actions.
+- Validate Turnstile success against the requesting site's hostname; do not accept a successful challenge issued for a different website.
+- Limit instructor/reviewer access to the courses explicitly assigned to them, including learner lists and submission reviews.
 - Log security events without storing passwords, OTPs, bearer tokens or full identity documents.
 - Back up D1 and periodically test restoration.
 - Monitor unusual login attempts, cross-organization access denials and payout changes.

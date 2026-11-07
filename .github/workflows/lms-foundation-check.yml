@@ -33,8 +33,24 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y sqlite3
       - name: Apply migration to a clean SQLite database
         run: sqlite3 /tmp/proctify-test.db < worker/migrations/0001_lms_foundation.sql
+      - name: Apply marketplace and course-access migration
+        run: sqlite3 /tmp/proctify-test.db < worker/migrations/0002_course_access_and_marketplace.sql
       - name: Confirm all twelve Proctify-owned assessments are present
         run: test "$(sqlite3 /tmp/proctify-test.db "SELECT COUNT(*) FROM proctify_assessments;")" = "12"
+      - name: Confirm marketplace course addresses are globally unique
+        run: |
+          sqlite3 /tmp/proctify-test.db <<'SQL'
+          INSERT INTO users(id,email,display_name) VALUES('ci-user','ci@example.test','CI User');
+          INSERT INTO organization_applications(id,organization_name,slug,organization_type,applicant_name,applicant_email) VALUES('ci-app-a','CI School A','ci-school-a','school','CI User','ci@example.test');
+          INSERT INTO organization_applications(id,organization_name,slug,organization_type,applicant_name,applicant_email) VALUES('ci-app-b','CI School B','ci-school-b','school','CI User','ci@example.test');
+          INSERT INTO organizations(id,application_id,name,slug,organization_type,owner_email) VALUES('ci-org-a','ci-app-a','CI School A','ci-school-a','school','ci@example.test');
+          INSERT INTO organizations(id,application_id,name,slug,organization_type,owner_email) VALUES('ci-org-b','ci-app-b','CI School B','ci-school-b','school','ci@example.test');
+          INSERT INTO courses(id,organization_id,owner_type,slug,title,created_by) VALUES('ci-course-a','ci-org-a','organization','shared-course-slug','Course A','ci-user');
+          SQL
+          if sqlite3 /tmp/proctify-test.db "INSERT INTO courses(id,organization_id,owner_type,slug,title,created_by) VALUES('ci-course-b','ci-org-b','organization','shared-course-slug','Course B','ci-user');"; then
+            echo "Global course slug constraint did not block a duplicate"
+            exit 1
+          fi
       - name: Confirm first-party assessment records cannot be edited
         run: |
           if sqlite3 /tmp/proctify-test.db "UPDATE proctify_assessments SET active=0 WHERE assessment_id='bigfive';"; then
