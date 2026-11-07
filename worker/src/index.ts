@@ -500,7 +500,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 
 
   // Educator groups and sections. All group data is scoped to a verified organization.
-  const groupBase = path.match(/^\\/api\\/organizations\\/([A-Za-z0-9-]+)\\/groups$/);
+  const groupBase = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/groups$/);
   if (groupBase && method === "POST") {
     const orgId = groupBase[1];
     if (!await requireMember(env, actor, orgId, ["owner","administrator"])) return fail(403, "GROUP_ADMIN_REQUIRED", "Only organization owners and administrators can create groups.");
@@ -525,7 +525,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ok:true,groups:rows.results||[]});
   }
 
-  const groupRoute = path.match(/^\\/api\\/organizations\\/([A-Za-z0-9-]+)\\/groups\\/([A-Za-z0-9-]+)(?:\\/(educators|learners|courses|activities|announcements|messages))?$/);
+  const groupRoute = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/groups\/([A-Za-z0-9-]+)(?:\/(educators|learners|courses|activities|announcements|messages))?$/);
   if (groupRoute) {
     const [,orgId,groupId,section] = groupRoute;
     const group = await env.DB.prepare("SELECT id,organization_id,name FROM learning_groups WHERE id=? AND organization_id=? AND status='active'").bind(groupId,orgId).first<{id:string;organization_id:string;name:string}>();
@@ -552,7 +552,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       if (!admin) return fail(403,"GROUP_ADMIN_REQUIRED","Only organization administrators can add learners to a group.");
       let body:any; try { body=await readJson(request); } catch { return fail(400,"INVALID_JSON","Please check the learner details."); }
       const email=String(body.email||"").trim().toLowerCase();
-      if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return fail(422,"INVALID_LEARNER_EMAIL","Enter the learner's verified account email.");
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail(422,"INVALID_LEARNER_EMAIL","Enter the learner's verified account email.");
       const learner=await env.DB.prepare("SELECT u.id FROM users u JOIN organization_members m ON m.user_id=u.id WHERE u.email=? COLLATE NOCASE AND u.status='active' AND m.organization_id=? AND m.role='learner' AND m.status='active'").bind(email,orgId).first<{id:string}>();
       if (!learner) return fail(404,"ACTIVE_LEARNER_REQUIRED","The learner must have an active account in this organization first.");
       await env.DB.prepare("INSERT OR IGNORE INTO learning_group_learners(group_id,organization_id,learner_id,added_by) VALUES(?,?,?,?)").bind(groupId,orgId,learner.id,actor.id).run();
@@ -628,12 +628,12 @@ async function route(request: Request, env: Env): Promise<Response> {
       return json({ok:true,messages:rows.results||[]});
     }
   }
-  const learnerInbox = path.match(/^\\/api\\/learners\\/me\\/messages$/);
+  const learnerInbox = path.match(/^\/api\/learners\/me\/messages$/);
   if (learnerInbox && method === "GET") {
     const rows=await env.DB.prepare("SELECT id,organization_id,group_id,sender_id,subject,body,read_at,created_at FROM learner_messages WHERE recipient_id=? ORDER BY created_at DESC LIMIT 100").bind(actor.id).all();
     return json({ok:true,messages:rows.results||[]});
   }
-  const learnerMessage = path.match(/^\\/api\\/organizations\\/([A-Za-z0-9-]+)\\/learners\\/([A-Za-z0-9-]+)\\/messages$/);
+  const learnerMessage = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/learners\/([A-Za-z0-9-]+)\/messages$/);
   if (learnerMessage && method === "POST") {
     const [,orgId,recipientId]=learnerMessage;
     if(!await requireMember(env,actor,orgId,["owner","administrator","instructor"]))return fail(403,"MESSAGE_PERMISSION_REQUIRED","Only organization administrators and educators can message learners.");
@@ -647,12 +647,12 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
 
-  const learnerGroups = path.match(/^\\/api\\/learners\\/me\\/groups$/);
+  const learnerGroups = path.match(/^\/api\/learners\/me\/groups$/);
   if (learnerGroups && method === "GET") {
     const rows=await env.DB.prepare("SELECT g.id,g.name,g.section_code,g.subject,o.name AS organization_name FROM learning_group_learners gl JOIN learning_groups g ON g.id=gl.group_id JOIN organizations o ON o.id=g.organization_id WHERE gl.learner_id=? AND g.status='active' AND o.status='verified' ORDER BY g.name").bind(actor.id).all();
     return json({ok:true,groups:rows.results||[]});
   }
-  const learnerGroupAnnouncements = path.match(/^\\/api\\/learners\\/me\\/groups\\/([A-Za-z0-9-]+)\\/announcements$/);
+  const learnerGroupAnnouncements = path.match(/^\/api\/learners\/me\/groups\/([A-Za-z0-9-]+)\/announcements$/);
   if (learnerGroupAnnouncements && method === "GET") {
     const groupId=learnerGroupAnnouncements[1];
     const member=await env.DB.prepare("SELECT 1 AS ok FROM learning_group_learners gl JOIN learning_groups g ON g.id=gl.group_id JOIN organizations o ON o.id=g.organization_id WHERE gl.group_id=? AND gl.learner_id=? AND g.status='active' AND o.status='verified'").bind(groupId,actor.id).first();
@@ -660,7 +660,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     const rows=await env.DB.prepare("SELECT a.id,a.title,a.body,a.created_at,u.display_name AS sender_name FROM learning_group_announcements a JOIN users u ON u.id=a.sender_id WHERE a.group_id=? ORDER BY a.created_at DESC LIMIT 100").bind(groupId).all();
     return json({ok:true,announcements:rows.results||[]});
   }
-  const learnerGroupReply = path.match(/^\\/api\\/learners\\/me\\/groups\\/([A-Za-z0-9-]+)\\/messages$/);
+  const learnerGroupReply = path.match(/^\/api\/learners\/me\/groups\/([A-Za-z0-9-]+)\/messages$/);
   if (learnerGroupReply && method === "POST") {
     const groupId=learnerGroupReply[1];
     const membership=await env.DB.prepare("SELECT g.organization_id FROM learning_group_learners gl JOIN learning_groups g ON g.id=gl.group_id JOIN organizations o ON o.id=g.organization_id WHERE gl.group_id=? AND gl.learner_id=? AND g.status='active' AND o.status='verified'").bind(groupId,actor.id).first<{organization_id:string}>();
