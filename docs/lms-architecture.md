@@ -27,8 +27,8 @@ Branding never transfers ownership. Every organization-owned record must be scop
 
 ## Roles
 - Learner: access enrolled or assigned learning.
-- Owner: full control of one organization.
-- Administrator: manage organization operations and members.
+- Owner: full control of one organization, including appointing administrators.
+- Administrator: manage organization operations and members, but cannot appoint another administrator or change the owner.
 - Publisher: create and publish courses for a verified organization.
 - Instructor: manage assigned courses and learner progress only after an organization administrator assigns them to each course.
 - Reviewer: review assigned course content and learner submissions only after an organization administrator assigns them to each course.
