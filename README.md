@@ -1,8 +1,8 @@
-# Proctify
+# PROCTORAVA
 
-**Proctored, Verified Assessments and Learning Management**
+**Learning Management, Proctored Assessments and Verified Credentials**
 
-Proctify brings together twelve first-party assessments, proctored skills testing, verified results and a multi-organization learning marketplace. Schools, companies and independent publishers can manage their own courses after verification, while Proctify retains ownership and control of its assessment and certification catalog.
+PROCTORAVA brings together twelve first-party assessments, proctored skills testing, verified results and a multi-organization learning marketplace. Schools, companies and independent publishers can manage their own courses after verification, while PROCTORAVA retains ownership and control of its assessment and certification catalog.
 
 By Operava Global Solutions.
 
@@ -10,7 +10,7 @@ By Operava Global Solutions.
 
 The existing assessment experience and its visual assets are preserved as the baseline. The current static preview is available at:
 
-**https://devjel.github.io/Proctify/**
+**https://devjel.github.io/PROCTORAVA/**
 
 The latest GitHub Pages deployment workflow for the merged `main` commit reported failure. Verify the deployment in GitHub Actions before assuming the live site reflects the latest repository changes.
 
@@ -27,7 +27,7 @@ See:
 
 ## Repository layout
 
-- `index.html` — existing Proctify assessment application
+- `index.html` — existing PROCTORAVA assessment application
 - `assets/img/` — existing brand marks, assessment covers, hero art and seals
 - `fonts/` — Inter and Lora fonts (see `FONTS-LICENSE.txt`)
 - `worker/` — Cloudflare Worker API foundation and D1 migration
