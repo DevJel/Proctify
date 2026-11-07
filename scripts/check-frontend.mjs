@@ -9,6 +9,13 @@ assert.match(html, /<meta name="viewport" content="width=device-width, initial-s
 assert.match(html, /<link rel="manifest" href="manifest.webmanifest">/, "PWA manifest must be linked");
 assert.match(html, /class="skip-link" href="#view"/, "keyboard skip link must exist");
 assert.match(html, /id="view"/, "main content target must exist");
+assert.match(html, /aria-label="Main navigation"/, "main navigation must have an accessible label");
+assert.match(html, /Courses &amp; assessments/, "course and assessment catalog tab must be visible");
+assert.match(html, /My learning/, "learner results tab must be visible");
+assert.match(html, /My certificates/, "certificate tab must be visible");
+assert.match(html, /Verify certificate/, "certificate verification tab must be visible");
+assert.match(html, /Admin console/, "platform administration tab must be visible");
+
 assert.doesNotMatch(html, /PROCTIFY/, "visible product branding must use PROCTORAVA");
 assert.match(html, /@media\(max-width:1024px\)/, "tablet layout breakpoint must exist");
 assert.match(html, /@media\(max-width:760px\)/, "small tablet layout breakpoint must exist");
