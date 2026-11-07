@@ -1,7 +1,18 @@
-# Proctify Deployment and Operations
+# PROCTORAVA Deployment and Operations
 
-## Current hosting
-GitHub Pages deploys the static frontend from the repository root when changes reach `main`. The workflow does not deploy the API.
+## Frontend hosting — Cloudflare Pages
+- Production project: `proctorava`
+- Production URL: https://proctorava.pages.dev
+- Cloudflare account: **Proctorava and HRIS app**
+- Source repository: `DevJel/Proctify`
+- Production branch: `main`
+- Root directory: repository root
+- Build command: none (the current frontend is static HTML and assets)
+- Output directory: repository root
+- GitHub Pages deployment workflow: removed. Do not restore it.
+- GitHub remains the source repository; Cloudflare Pages is the production hosting destination.
+
+Cloudflare deployment must be verified after each hosting change. Confirm the latest production deployment status and open the production URL before announcing a release.
 
 ## API setup
 1. Copy `worker/wrangler.example.toml` to a private local `worker/wrangler.toml`.
@@ -26,7 +37,7 @@ GitHub Pages deploys the static frontend from the repository root when changes r
 The first platform administrator must be created through a controlled one-time database operation after the identity account is verified. Do not expose a public route that can grant Super Admin. Record the bootstrap in the audit log and remove temporary credentials immediately.
 
 ## Deployment safety
-- Keep the current production Pages deployment unchanged until the new API and portal flows pass staging.
+- Keep the existing assessment experience available while API and portal flows are tested in staging. The frontend production host is Cloudflare Pages.
 - Apply D1 migrations to a staging database first.
 - Back up the database before every production migration.
 - Use additive migrations and avoid destructive changes to the existing assessment catalog.
