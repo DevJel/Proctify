@@ -39,3 +39,12 @@
 8. Configure a same-origin Worker route or explicit frontend API base URL; the current relative health check is not yet connected to this Worker.
 9. Implement and test the three role-specific login screens, SES email verification, course asset delivery, certificate issuance/revocation and complete payment endpoints.
 10. Run migrations, type checks, API tests, access-control tests, browser checks and restore testing before enabling production traffic.
+
+
+## PROCTORAVA experience review (2026-11-07)
+- The visible product labels in the existing assessment app now use PROCTORAVA.
+- The app shell has fluid desktop sizing, tablet navigation, mobile spacing, keyboard skip navigation, focus visibility, larger touch targets and reduced-motion support.
+- The website includes an installable PWA manifest and an offline static shell. API calls and requests carrying authorization are excluded from the service-worker cache.
+- The existing application is still an assessment-first frontend. It is not yet the complete multi-role LMS portal described in the architecture document.
+- The current Worker uses signed HS256 bearer tokens. Email OTP, WebAuthn passkeys, organization OIDC/SAML SSO, native app sign-in and session recovery are not implemented in the Worker.
+- The identity provider and email delivery service must be selected and configured before these sign-in methods can be safely activated. No login control should claim success before a real provider session is verified.
