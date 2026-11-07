@@ -1,5 +1,6 @@
 export interface Env {
   DB: D1Database;
+  ASSETS: R2Bucket;
   APP_ORIGIN: string;
   AUTH_ISSUER: string;
   AUTH_AUDIENCE: string;
@@ -84,8 +85,13 @@ async function verifyTurnstile(request: Request, env: Env, token: string) {
   const ip = request.headers.get("CF-Connecting-IP");
   if (ip) body.set("remoteip", ip);
   const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", { method: "POST", body });
-  const result = await response.json() as { success?: boolean };
-  return response.ok && result.success === true;
+  const result = await response.json() as { success?: boolean; hostname?: string; action?: string };
+  const origin = request.headers.get("Origin");
+  let expectedHostname = new URL(request.url).hostname;
+  if (origin) {
+    try { expectedHostname = new URL(origin).hostname; } catch { return false; }
+  }
+  return response.ok && result.success === true && result.hostname === expectedHostname && (!result.action || result.action === "organization_application");
 }
 
 async function route(request: Request, env: Env): Promise<Response> {
@@ -154,7 +160,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (method === "GET" && path === "/api/admin/organization-applications") {
     const admin = await env.DB.prepare("SELECT status FROM platform_admins WHERE user_id=?").bind(actor.id).first<{status:string}>();
     if (!admin || admin.status !== "active") return fail(403, "SUPER_ADMIN_REQUIRED", "This action is restricted to Proctify Super Admins.");
-    const rows = await env.DB.prepare("SELECT id,organization_name,slug,organization_type,applicant_name,applicant_email,website,country_code,verification_status,created_at FROM organization_applications WHERE verification_status IN ('pending','in_review') ORDER BY created_at ASC LIMIT 100").all();
+    const rows = await env.DB.prepare("SELECT id,organization_name,slug,organization_type,applicant_name,applicant_email,website,country_code,registration_reference,verification_status,created_at FROM organization_applications WHERE verification_status IN ('pending','in_review') ORDER BY created_at ASC LIMIT 100").all();
     return json({ ok: true, applications: rows.results || [] });
   }
 
@@ -199,7 +205,12 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (method === "POST" && claimMatch) {
     const org = await env.DB.prepare("SELECT id,owner_email,status FROM organizations WHERE id=?").bind(claimMatch[1]).first<{id:string;owner_email:string;status:string}>();
     if (!org || org.status !== "verified" || org.owner_email.toLowerCase() !== actor.email) return fail(403, "CLAIM_NOT_ALLOWED", "This organization cannot be claimed by this account.");
-    await env.DB.prepare("INSERT OR IGNORE INTO organization_members(organization_id,user_id,role,status) VALUES(?,?, 'owner','active')").bind(org.id, actor.id).run();
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO organization_members(organization_id,user_id,role,status) VALUES(?,?, 'owner','active') ON CONFLICT(organization_id,user_id) DO UPDATE SET role='owner',status='active'")
+        .bind(org.id, actor.id),
+      env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id) VALUES(?,?,?,?,?,?)")
+        .bind(id(), actor.id, org.id, "organization.owner.claimed", "organization", org.id)
+    ]);
     return json({ ok: true, organizationId: org.id, role: "owner" });
   }
 
@@ -207,7 +218,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (method === "GET" && membersMatch) {
     const orgId = membersMatch[1];
     if (!await requireMember(env, actor, orgId, ["owner","administrator"])) return fail(403, "MEMBER_ADMIN_REQUIRED", "Only organization owners and administrators can view the member directory.");
-    const members = await env.DB.prepare("SELECT u.id,u.email,u.display_name,m.role,m.status,m.created_at FROM organization_members m JOIN users u ON u.id=m.user_id WHERE m.organization_id=? ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'administrator' THEN 1 WHEN 'publisher' THEN 2 WHEN 'instructor' THEN 3 WHEN 'reviewer' THEN 4 ELSE 5 END,u.display_name LIMIT 250")
+    const members = await env.DB.prepare("SELECT u.id,u.email,u.display_name,u.status AS account_status,m.role,m.status,m.created_at FROM organization_members m JOIN users u ON u.id=m.user_id WHERE m.organization_id=? ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'administrator' THEN 1 WHEN 'publisher' THEN 2 WHEN 'instructor' THEN 3 WHEN 'reviewer' THEN 4 ELSE 5 END,u.display_name LIMIT 250")
       .bind(orgId).all();
     return json({ ok: true, members: members.results || [] });
   }
@@ -274,6 +285,40 @@ async function route(request: Request, env: Env): Promise<Response> {
     await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id,detail_json) VALUES(?,?,?,?,?,?,?)")
       .bind(id(), actor.id, orgId, "course.staff.assigned", "course_staff", courseId, JSON.stringify({userId,role})).run();
     return json({ ok: true, courseId, userId, role });
+  }
+
+  const orgEnrollmentsMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses\/([A-Za-z0-9-]+)\/enrollments$/);
+  if (method === "GET" && orgEnrollmentsMatch) {
+    const [, orgId, courseId] = orgEnrollmentsMatch;
+    if (!await requireMember(env, actor, orgId, ["owner","administrator","publisher","instructor","reviewer"])) return fail(403, "ORGANIZATION_ACCESS_REQUIRED", "You do not have access to this course's learners.");
+    const course = await env.DB.prepare("SELECT id FROM courses WHERE id=? AND organization_id=?").bind(courseId, orgId).first();
+    if (!course) return fail(404, "COURSE_NOT_FOUND", "This course does not belong to the organization.");
+    const rows = await env.DB.prepare("SELECT e.id AS enrollment_id,e.status,e.enrolled_at,u.id AS learner_id,u.display_name,u.email,COUNT(DISTINCT l.id) AS lesson_count,COUNT(DISTINCT CASE WHEN p.status='completed' THEN p.lesson_id END) AS completed_lessons FROM enrollments e JOIN users u ON u.id=e.learner_id LEFT JOIN course_modules m ON m.course_id=e.course_id LEFT JOIN course_lessons l ON l.module_id=m.id LEFT JOIN lesson_progress p ON p.enrollment_id=e.id AND p.lesson_id=l.id WHERE e.course_id=? AND e.organization_id=? GROUP BY e.id ORDER BY e.enrolled_at DESC LIMIT 250")
+      .bind(courseId, orgId).all();
+    return json({ ok: true, enrollments: rows.results || [] });
+  }
+
+  if (method === "POST" && orgEnrollmentsMatch) {
+    const [, orgId, courseId] = orgEnrollmentsMatch;
+    if (!await requireMember(env, actor, orgId, ["owner","administrator","publisher"])) return fail(403, "ENROLLMENT_ADMIN_REQUIRED", "Only organization owners, administrators and publishers can enroll learners.");
+    let body: any;
+    try { body = await readJson(request); } catch { return fail(400, "INVALID_JSON", "Please check the learner details."); }
+    const email = String(body.email || "").trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail(422, "INVALID_LEARNER_EMAIL", "Enter the learner's verified Proctify account email.");
+    const course = await env.DB.prepare("SELECT c.id,c.price_minor FROM courses c JOIN organizations o ON o.id=c.organization_id WHERE c.id=? AND c.organization_id=? AND c.owner_type='organization' AND c.status='published' AND o.status='verified'")
+      .bind(courseId, orgId).first<{id:string;price_minor:number}>();
+    if (!course) return fail(404, "COURSE_NOT_AVAILABLE", "This published course is not available for organization enrollment.");
+    if (course.price_minor > 0) return fail(402, "CHECKOUT_REQUIRED", "Paid course seats must be purchased through Proctify checkout before assignment.");
+    const learner = await env.DB.prepare("SELECT u.id FROM users u JOIN organization_members m ON m.user_id=u.id WHERE u.email=? COLLATE NOCASE AND u.status='active' AND m.organization_id=? AND m.role='learner' AND m.status='active'")
+      .bind(email, orgId).first<{id:string}>();
+    if (!learner) return fail(404, "ACTIVE_LEARNER_REQUIRED", "Add the person as an active learner in this organization before enrolling them.");
+    const enrollmentId = id();
+    await env.DB.prepare("INSERT OR IGNORE INTO enrollments(id,course_id,learner_id,organization_id,source,status) VALUES(?,?,?,?,'organization_assignment','active')")
+      .bind(enrollmentId, courseId, learner.id, orgId).run();
+    const enrollment = await env.DB.prepare("SELECT id,status,enrolled_at FROM enrollments WHERE course_id=? AND learner_id=?").bind(courseId, learner.id).first();
+    await env.DB.prepare("INSERT INTO audit_logs(id,actor_id,organization_id,action,target_type,target_id,detail_json) VALUES(?,?,?,?,?,?,?)")
+      .bind(id(), actor.id, orgId, "course.learner.enrolled", "enrollment", enrollmentId, JSON.stringify({courseId,learnerId:learner.id})).run();
+    return json({ ok: true, enrollment }, 201);
   }
 
   const publishMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses\/([A-Za-z0-9-]+)\/publish$/);
