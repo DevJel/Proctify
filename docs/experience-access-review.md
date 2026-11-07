@@ -49,3 +49,13 @@ flowchart TD
 
 ## Deployment boundary
 The Pages workflow publishes static files only. The Cloudflare Worker, D1 database, R2 storage, email sender and identity provider remain separate services. A successful static-site build does not mean authentication or LMS API services are live.
+
+
+## Navigation tabs added
+The main navigation is now grouped into clear areas:
+- **Learn:** Home, Courses & assessments, My learning.
+- **Credentials:** My certificates, Verify certificate.
+- **Management:** Admin console.
+- **Account:** Settings.
+
+The links use existing application routes. The Admin console remains protected by the current server-backed admin token flow. Organization and educator workspaces are not shown as active navigation destinations yet: their API foundation exists, but their complete signed-in screens and identity services still need to be connected. This avoids presenting unfinished areas as working features.
