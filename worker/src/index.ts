@@ -290,7 +290,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const orgEnrollmentsMatch = path.match(/^\/api\/organizations\/([A-Za-z0-9-]+)\/courses\/([A-Za-z0-9-]+)\/enrollments$/);
   if (method === "GET" && orgEnrollmentsMatch) {
     const [, orgId, courseId] = orgEnrollmentsMatch;
-    if (!await requireMember(env, actor, orgId, ["owner","administrator","publisher","instructor","reviewer"])) return fail(403, "ORGANIZATION_ACCESS_REQUIRED", "You do not have access to this course's learners.");
+    if (!await requireCourseAccess(env, actor, orgId, courseId, ["owner","administrator","publisher"], ["instructor","reviewer"])) return fail(403, "ORGANIZATION_ACCESS_REQUIRED", "You do not have access to this course's learners.");
     const course = await env.DB.prepare("SELECT id FROM courses WHERE id=? AND organization_id=?").bind(courseId, orgId).first();
     if (!course) return fail(404, "COURSE_NOT_FOUND", "This course does not belong to the organization.");
     const rows = await env.DB.prepare("SELECT e.id AS enrollment_id,e.status,e.enrolled_at,u.id AS learner_id,u.display_name,u.email,COUNT(DISTINCT l.id) AS lesson_count,COUNT(DISTINCT CASE WHEN p.status='completed' THEN p.lesson_id END) AS completed_lessons FROM enrollments e JOIN users u ON u.id=e.learner_id LEFT JOIN course_modules m ON m.course_id=e.course_id LEFT JOIN course_lessons l ON l.module_id=m.id LEFT JOIN lesson_progress p ON p.enrollment_id=e.id AND p.lesson_id=l.id WHERE e.course_id=? AND e.organization_id=? GROUP BY e.id ORDER BY e.enrolled_at DESC LIMIT 250")
