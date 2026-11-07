@@ -15,7 +15,7 @@
 
 ## This implementation branch
 - Adds an initial D1 LMS schema, including organization applications, verified organizations, organization membership, courses, curriculum, enrollments, progress, assignments, assessments, certificates, orders, publisher ledger, payouts, reviews, and audit records.
-- Adds a Worker API foundation for health, Turnstile-protected organization applications, marketplace course discovery, globally unique course addresses, organization claiming and verification, course drafting and publishing, assigned course staff, learner enrollment summaries, free enrollment, preview-aware curriculum access, lesson progress, assignment creation/submission/review, read-only Proctify assessment catalog and certificate lookup.
+- Adds a Worker API foundation for health, Turnstile-protected organization applications, marketplace course discovery, globally unique course addresses, organization claiming and verification, course drafting and publishing, organization member management, assigned course staff, learner enrollment summaries, free enrollment, preview-aware curriculum access, lesson progress, assignment creation/submission/review, read-only Proctify assessment catalog and certificate lookup.
 - Strengthens authentication to require a signed verified-email claim and rejects suspended/deleted accounts without silently overwriting account email addresses.
 - Makes organization verification and its audit record a single database batch; masks learner surnames on public certificate verification.
 - Adds architecture and deployment guidance.
