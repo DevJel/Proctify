@@ -1,6 +1,6 @@
 # Proctify API Foundation
 
-Base path: `/api`. All API responses are JSON. The Worker is a separate deployment from GitHub Pages.
+Base path: `/api`. All API responses are JSON. The Worker is a separate deployment from the Cloudflare Pages frontend.
 
 ## Public endpoints
 
@@ -92,3 +92,20 @@ The token issuer must verify the user's email and include the signed `email_veri
 ## Current implementation limits
 
 This is an API foundation, not a complete LMS service. Course module/lesson/assignment editing, free enrollment, preview-aware curriculum access, lesson progress, assignment submission and review, organization course lists, assigned course staff, learner enrollment summaries and a read-only Proctify assessment catalog are included. The educator group APIs now cover group/section creation, educator assignment, learner rosters, course assignment, lesson/assignment activities, group announcements and direct learner messages. A learner inbox endpoint is available. The static application still needs its educator and learner messaging screens wired to these endpoints. Assignment grading, assessment-session integration, email OTP delivery, SES notifications, payment checkout/webhooks, payout execution, custom-domain routing, file upload/download signing, and the final three login screens still require implementation and provider configuration. Paid course enrollment returns a clear checkout-required response until a payment provider is connected. Organization bulk enrollment is limited to free courses and existing active learner members so it cannot bypass platform checkout. Payment status must never be accepted from a browser request.
+
+## Authentication endpoints
+
+| Method and path | Purpose | Protection |
+|---|---|---|
+| `POST /auth/challenge` | Request a six-digit email code | Public; D1 email/IP rate limits; SES delivery |
+| `POST /auth/verify` | Verify a code and issue a session | Public; challenge, expiry, attempt and one-use checks |
+| `GET /auth/me` | Read current user, organization memberships and platform-admin status | Signed-in bearer session |
+| `POST /auth/logout` | Revoke the current session | Signed-in bearer session |
+
+Challenge body: `{"email":"person@example.com","audience":"learner"}`. Audience is `learner`, `organization` or `admin`. Optional `organizationId` can narrow organization access.
+
+Verification body: `{"email":"person@example.com","challengeId":"...","code":"123456"}`. A successful response returns a signed bearer token, expiry and server-determined role. The browser must never submit a trusted role.
+
+Learner and organization sessions last 12 hours; Super Admin sessions last 4 hours. Each issued token has a D1 session ID, checked on every protected request. Logout revokes the session. Tokens are held in `sessionStorage`, not `localStorage`.
+
+See [Authentication architecture](authentication-architecture.md) for full request/response examples, rate limits, SES settings, error codes and production blockers. Production sign-in is not live until the Worker, D1, SES credentials and sender verification are deployed and tested.
