@@ -44,3 +44,21 @@ The first platform administrator must be created through a controlled one-time d
 - Keep payment, email and identity integrations disabled until their secrets and provider webhooks are verified.
 - Monitor Worker errors, D1 usage, R2 access, failed logins, registration abuse and payment reconciliation.
 - Test backup restoration and account/certificate export procedures.
+
+## Authentication backend deployment requirements
+
+Target Worker: `proctorava-api`  
+Target API origin: `https://proctorava-api.black-tooth-5474.workers.dev/api`  
+D1 database: `proctorava-db`  
+R2 bucket: `proctorava-course-assets`  
+Migrations: apply `0001`, `0002`, `0003`, then `0004_auth_sessions.sql` in order.
+
+Required public variables: `APP_ORIGIN=https://proctorava.pages.dev`, `AUTH_ISSUER` equal to the deployed Worker origin, `AUTH_AUDIENCE=proctorava`, `AWS_REGION=ap-southeast-2`, and `SES_FROM_EMAIL` set to a verified SES sender.
+
+Required private secrets: `AUTH_JWT_SECRET`, `AUTH_OTP_SECRET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`, and `TURNSTILE_SECRET` for organization applications. Use Cloudflare secrets; never commit these values.
+
+The connected Cloudflare account inventory was checked before this branch: it had no D1 databases and no PROCTORAVA API Worker. An unrelated `verified-profile-demo` Worker existed and must not be changed. The Worker hostname above is a target, not a verified live endpoint.
+
+Before launch, provision staging and production D1/R2, apply migrations, deploy the Worker, verify SES sender and external email delivery, restrict CORS, enable edge rate limits, privately bootstrap Super Admin and test the complete browser-to-D1 flow. Super Admin needs an independent second factor before high-impact production controls.
+
+See [Authentication architecture](authentication-architecture.md), [Agent handoff](agent-handoff.md) and the full production checklist in this file's authentication release requirements.
