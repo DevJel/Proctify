@@ -8,9 +8,11 @@ By Operava Global Solutions.
 
 ## Current application
 
-The existing assessment experience and its visual assets are preserved as the baseline. The current static preview is available at:
+The existing assessment experience and its visual assets are preserved as the baseline. The configured GitHub Pages address is:
 
 **https://devjel.github.io/Proctify/**
+
+The latest GitHub Pages deployment workflow for the merged `main` commit reported failure. Verify the deployment in GitHub Actions before assuming the current site reflects the latest repository changes.
 
 GitHub Pages publishes the static frontend from the repository root. It does not host the API, database, authentication, email delivery or payment processing.
 
