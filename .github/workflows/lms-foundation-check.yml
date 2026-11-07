@@ -37,8 +37,22 @@ jobs:
         run: sqlite3 /tmp/proctify-test.db < worker/migrations/0002_course_access_and_marketplace.sql
       - name: Apply educator groups and communication migration
         run: sqlite3 /tmp/proctify-test.db < worker/migrations/0003_educator_groups_and_communication.sql
+      - name: Apply authentication sessions migration
+        run: sqlite3 /tmp/proctify-test.db < worker/migrations/0004_auth_sessions.sql
+      - name: Confirm authentication tables exist
+        run: test "$(sqlite3 /tmp/proctify-test.db \"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('auth_challenges','auth_sessions');\")" = "2"
       - name: Confirm educator group tables and organization boundaries exist
         run: test "$(sqlite3 /tmp/proctify-test.db "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('learning_groups','learning_group_educators','learning_group_learners','learning_group_courses','learning_group_activities','learning_group_announcements','learner_messages');")" = "7"
+      - name: Confirm authentication constraints reject invalid roles and attempts
+        run: |
+          if sqlite3 /tmp/proctify-test.db "INSERT INTO auth_challenges(id,email_hash,audience,code_hash,expires_at,request_ip_hash) VALUES('bad-audience','hash','superuser','hash','2099-01-01T00:00:00.000Z','ip');"; then
+            echo "Invalid authentication audience was accepted"
+            exit 1
+          fi
+          if sqlite3 /tmp/proctify-test.db "INSERT INTO auth_challenges(id,email_hash,audience,code_hash,attempts,expires_at,request_ip_hash) VALUES('bad-attempts','hash','learner','hash',6,'2099-01-01T00:00:00.000Z','ip');"; then
+            echo "Invalid authentication attempt count was accepted"
+            exit 1
+          fi
       - name: Confirm all twelve Proctify-owned assessments are present
         run: test "$(sqlite3 /tmp/proctify-test.db "SELECT COUNT(*) FROM proctify_assessments;")" = "12"
       - name: Confirm marketplace course addresses are globally unique
