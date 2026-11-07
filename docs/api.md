@@ -38,6 +38,29 @@ Base path: `/api`. All API responses are JSON. The Worker is a separate deployme
 | `POST /enrollments/{id}/progress` | Save lesson progress for the signed-in learner | Enrollment owner |
 | `POST /assignments/{id}/submissions` | Submit or resubmit an assignment | Enrolled learner |
 
+## Educator and organization group endpoints
+
+| Method and path | Purpose | Required role |
+|---|---|---|
+| `GET /organizations/{id}/groups` | List groups and sections visible to the signed-in organization user | Owner, administrator or assigned instructor |
+| `POST /organizations/{id}/groups` | Create a class, cohort, department or section | Owner or administrator |
+| `GET /organizations/{id}/groups/{groupId}/educators` | List educators assigned to a group | Group educator or organization administrator |
+| `POST /organizations/{id}/groups/{groupId}/educators` | Assign an active organization instructor to a group | Owner or administrator |
+| `GET /organizations/{id}/groups/{groupId}/learners` | View the group's learner roster | Group educator or organization administrator |
+| `POST /organizations/{id}/groups/{groupId}/learners` | Add an active organization learner to a group | Owner or administrator |
+| `GET /organizations/{id}/groups/{groupId}/courses` | View subjects/courses assigned to a group | Group educator or organization administrator |
+| `POST /organizations/{id}/groups/{groupId}/courses` | Assign a published course to the group and enroll current group learners | Owner or administrator; paid seats require checkout |
+| `GET /organizations/{id}/groups/{groupId}/activities` | List assigned learning activities and deadlines | Group educator or organization administrator |
+| `POST /organizations/{id}/groups/{groupId}/activities` | Add a lesson or assignment activity from a course already assigned to the group | Group educator or organization administrator |
+| `GET /organizations/{id}/groups/{groupId}/announcements` | Read group announcements | Group educator or organization administrator |
+| `POST /organizations/{id}/groups/{groupId}/announcements` | Send an announcement to the group | Group educator or organization administrator |
+| `GET /organizations/{id}/groups/{groupId}/messages` | View direct messages in the group conversation | Group educator or organization administrator |
+| `POST /organizations/{id}/groups/{groupId}/messages` | Message one learner in the group | Group educator or organization administrator |
+| `POST /organizations/{id}/learners/{learnerId}/messages` | Message an active learner in the same organization | Owner, administrator or instructor |
+| `GET /learners/me/messages` | Read messages addressed to the signed-in learner | Signed-in learner |
+
+Group course assignment only accepts published Proctify courses or published courses owned by the same organization. Paid courses cannot be assigned without a completed platform checkout. Learners must already be active members of the organization. Educators can only access groups explicitly assigned to them; organization administrators can manage all groups in their organization.
+
 ## Super Admin endpoints
 
 | Method and path | Purpose | Required role |
@@ -65,4 +88,4 @@ The token issuer must verify the user's email and include the signed `email_veri
 
 ## Current implementation limits
 
-This is an API foundation, not a complete LMS service. Course module/lesson/assignment editing, free enrollment, preview-aware curriculum access, lesson progress, assignment submission and review, organization course lists, assigned course staff, learner enrollment summaries and a read-only Proctify assessment catalog are included. Assignment grading, assessment-session integration, email OTP delivery, SES notifications, payment checkout/webhooks, payout execution, custom-domain routing, file upload/download signing, and the final three login screens still require implementation and provider configuration. Paid course enrollment returns a clear checkout-required response until a payment provider is connected. Organization bulk enrollment is limited to free courses and existing active learner members so it cannot bypass platform checkout. Payment status must never be accepted from a browser request.
+This is an API foundation, not a complete LMS service. Course module/lesson/assignment editing, free enrollment, preview-aware curriculum access, lesson progress, assignment submission and review, organization course lists, assigned course staff, learner enrollment summaries and a read-only Proctify assessment catalog are included. The educator group APIs now cover group/section creation, educator assignment, learner rosters, course assignment, lesson/assignment activities, group announcements and direct learner messages. A learner inbox endpoint is available. The static application still needs its educator and learner messaging screens wired to these endpoints. Assignment grading, assessment-session integration, email OTP delivery, SES notifications, payment checkout/webhooks, payout execution, custom-domain routing, file upload/download signing, and the final three login screens still require implementation and provider configuration. Paid course enrollment returns a clear checkout-required response until a payment provider is connected. Organization bulk enrollment is limited to free courses and existing active learner members so it cannot bypass platform checkout. Payment status must never be accepted from a browser request.
